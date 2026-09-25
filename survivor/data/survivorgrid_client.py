@@ -62,16 +62,18 @@ def parse_pick_grid(html: str) -> pd.DataFrame:
 
 def _parse_percent(text: str) -> float | None:
     text = text.strip()
-    if not text or text in {"-", "N/A"}:
-        return None
-    return float(text.rstrip("%")) / 100.0
+    try:
+        return float(text.rstrip("%")) / 100.0
+    except ValueError:
+        return None  # blank cell placeholder -- seen as "-", "--", "N/A" across seasons
 
 
 def _parse_float(text: str) -> float | None:
     text = text.strip()
-    if not text or text in {"-", "N/A"}:
-        return None
-    return float(text)
+    try:
+        return float(text)
+    except ValueError:
+        return None  # blank cell placeholder -- seen as "-", "--", "N/A" across seasons
 
 
 def fetch_pick_grid(year: int, week: int) -> pd.DataFrame:
