@@ -20,7 +20,12 @@ Run: .venv/bin/python scripts/backtest_week1.py
 import numpy as np
 import pandas as pd
 
-from survivor.data.survivorgrid_client import fetch_week_html, parse_pick_grid, parse_schedule_grid
+from survivor.data.survivorgrid_client import (
+    dedupe_schedule_games,
+    fetch_week_html,
+    parse_pick_grid,
+    parse_schedule_grid,
+)
 from survivor.probability.current_week import DEFAULT_TIE_PROBABILITY
 from survivor.probability.ratings import DEFAULT_RIDGE, fit_team_ratings
 from survivor.simulation.field_simulator import score_candidate, simulate_rival_field
@@ -33,34 +38,12 @@ N_RIVALS = 500  # assumed field size -- the real Week 1 field size for this spec
 N_PATHS = 20000
 
 
-def _dedupe_games(schedule_grid: pd.DataFrame) -> pd.DataFrame:
-    """One row per real (week, game), from a grid with one row per (team, week).
-
-    Prefers the row marked is_home=True. A neutral-site game has SurvivorGrid
-    mark *both* sides "rd" (away) -- confirmed on the real LAR @ SF Week 1,
-    2026 game, which silently vanished from a naive is_home-only filter,
-    dropping LAR (a legitimate 64.1% survival-probability candidate)
-    entirely. Falls back to either row (arbitrary designated "home") for
-    those, at the minor, unavoidable cost of attributing a small amount of
-    home-field advantage to a team that didn't actually have it that week.
-    """
-    games = schedule_grid[~schedule_grid["is_bye"]].copy()
-    games["game_key"] = games.apply(lambda r: (r["week"], frozenset({r["team"], r["opponent"]})), axis=1)
-
-    rows = []
-    for _, group in games.groupby("game_key"):
-        home_rows = group[group["is_home"] == True]  # noqa: E712 (is_home is nullable, `is True` misses it)
-        row = home_rows.iloc[0] if not home_rows.empty else group.iloc[0]
-        rows.append({"week": row["week"], "home_team": row["team"], "away_team": row["opponent"], "home_spread": row["spread"]})
-    return pd.DataFrame(rows)
-
-
 def main() -> None:
     html = fetch_week_html(YEAR, WEEK)
     schedule_grid = parse_schedule_grid(html, start_week=WEEK)
     picks = parse_pick_grid(html)  # NOTE: 'result' column exists but is intentionally unused until the end
 
-    all_games = _dedupe_games(schedule_grid)
+    all_games = dedupe_schedule_games(schedule_grid)
     full_schedule = all_games[["week", "home_team", "away_team"]]
     week1_games = all_games[all_games["week"] == WEEK][["home_team", "away_team", "home_spread"]]
 

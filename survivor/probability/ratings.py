@@ -146,11 +146,17 @@ def sample_correlated_ratings(
     return result
 
 
-def fit_weekly_rating_std(rating_history: pd.DataFrame) -> float:
+def fit_weekly_rating_std(rating_history: pd.DataFrame | list[pd.DataFrame]) -> float:
     """Fit weekly random-walk std from historical week-over-week rating changes.
 
-    rating_history: wide DataFrame indexed by week, one column per team,
-    containing that team's fitted rating each week (NaN for bye weeks).
+    rating_history: a wide DataFrame indexed by week, one column per team,
+    containing that team's fitted rating each week (NaN for bye weeks) --
+    or a list of such DataFrames, one per season. A list is required for
+    more than one season: diffing across a season boundary (e.g. Week 18 of
+    one year to Week 1 of the next) isn't a meaningful "one week" change --
+    rosters turn over -- so each season's diffs are computed separately
+    before pooling.
     """
-    weekly_changes = rating_history.diff().stack()
-    return float(weekly_changes.std())
+    histories = rating_history if isinstance(rating_history, list) else [rating_history]
+    all_changes = pd.concat([history.sort_index().diff().stack() for history in histories])
+    return float(all_changes.std())

@@ -94,7 +94,15 @@ def parse_schedule_grid(html: str, start_week: int) -> pd.DataFrame:
             continue
         team = to_abbreviation(team_match.group())
 
-        for offset, cell in enumerate(cells[4:-1]):  # last cell is the "fv" star rating, not a week
+        # The trailing "fv" (future value / star rating) cell is only
+        # present when there are future weeks left to rate -- a season's
+        # final week page (e.g. /2023/18) omits it entirely, so detect it
+        # rather than assume a fixed position (confirmed on real data: that
+        # page has exactly 5 cells total, all of them real).
+        has_trailing_fv_cell = "fv" in cells[-1].get("class", [])
+        week_cells = cells[4:-1] if has_trailing_fv_cell else cells[4:]
+
+        for offset, cell in enumerate(week_cells):
             week = start_week + offset
             if "bye" in cell.get("class", []):
                 rows.append({"team": team, "week": week, "opponent": None, "is_home": None,
@@ -114,6 +122,29 @@ def parse_schedule_grid(html: str, start_week: int) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows, columns=["team", "week", "opponent", "is_home", "spread", "is_bye"])
+
+
+def dedupe_schedule_games(schedule_grid: pd.DataFrame) -> pd.DataFrame:
+    """One row per real (week, game), from a grid with one row per (team, week).
+
+    Prefers the row marked is_home=True. A neutral-site game has
+    SurvivorGrid mark *both* sides "rd" (away) -- confirmed on the real
+    LAR @ SF Week 1, 2026 game, which silently vanished from a naive
+    is_home-only filter, dropping LAR (a legitimate 64.1%
+    survival-probability candidate) entirely. Falls back to either row
+    (arbitrary designated "home") for those, at the minor, unavoidable cost
+    of attributing a small amount of home-field advantage to a team that
+    didn't actually have it that week.
+    """
+    games = schedule_grid[~schedule_grid["is_bye"]].copy()
+    games["game_key"] = games.apply(lambda r: (r["week"], frozenset({r["team"], r["opponent"]})), axis=1)
+
+    rows = []
+    for _, group in games.groupby("game_key"):
+        home_rows = group[group["is_home"] == True]  # noqa: E712 (is_home is nullable, `is True` misses it)
+        row = home_rows.iloc[0] if not home_rows.empty else group.iloc[0]
+        rows.append({"week": row["week"], "home_team": row["team"], "away_team": row["opponent"], "home_spread": row["spread"]})
+    return pd.DataFrame(rows, columns=["week", "home_team", "away_team", "home_spread"])
 
 
 def _parse_percent(text: str) -> float | None:

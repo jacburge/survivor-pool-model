@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from survivor.data.survivorgrid_client import parse_pick_grid, parse_schedule_grid
+from survivor.data.survivorgrid_client import dedupe_schedule_games, parse_pick_grid, parse_schedule_grid
 
 # A minimal fixture mirroring survivorgrid.com's real table structure (verified
 # via a live raw-HTML pull): four <td class="dist"> for EV/W%/P%, a
@@ -151,6 +151,38 @@ def test_schedule_grid_marks_bye_week():
     assert pd.isna(lac_week3["spread"])
 
 
+FINAL_WEEK_HTML = """
+<table class="datatable" id="grid">
+  <thead><tr><th>EV</th><th>W%</th><th>P%</th><th>Team</th><th>18</th></tr></thead>
+  <tbody>
+    <tr id="t9">
+      <td class="dist">1.42</td>
+      <td class="dist">84.9%</td>
+      <td class="dist">7.5%</td>
+      <td class="teamname">DAL<span class="resultW">&nbsp;(W)</span></td>
+      <td class="gc rd dv">
+        @WAS<br>
+        <span class="spread">-13.5</span>
+      </td>
+    </tr>
+  </tbody>
+</table>
+"""
+
+
+def test_schedule_grid_handles_season_final_week_with_no_trailing_fv_cell():
+    # A season's last week page omits the trailing "fv" (future value) cell
+    # entirely, since there's no more season left to rate -- confirmed on
+    # the real /2023/18 page, which has exactly 5 cells per row, all real.
+    df = parse_schedule_grid(FINAL_WEEK_HTML, start_week=18)
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["team"] == "DAL"
+    assert row["week"] == 18
+    assert row["opponent"] == "WAS"
+    assert row["spread"] == pytest.approx(-13.5)
+
+
 def test_schedule_grid_handles_neutral_site_marker():
     df = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=1)
     sf_week1 = df[(df.team == "SF") & (df.week == 1)].iloc[0]
@@ -164,6 +196,74 @@ def test_schedule_grid_week_numbers_offset_from_start_week():
 
     df_offset = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=5)
     assert set(df_offset[df_offset.team == "LAC"]["week"]) == {5, 6, 7}
+
+
+_FV_CELL = '<td class="fv" data-sort-value="0.5"><div class="starrating"></div></td>'
+
+NEUTRAL_GAME_HTML = f"""
+<table class="datatable" id="grid">
+  <thead><tr><th>EV</th><th>W%</th><th>P%</th><th>Team</th><th>1</th></tr></thead>
+  <tbody>
+    <tr><td class="dist">1.0</td><td class="dist">50%</td><td class="dist">5%</td>
+        <td class="teamname">BUF</td>
+        <td class="gc">NE<br><span class="spread">-3</span></td>
+        {_FV_CELL}</tr>
+    <tr><td class="dist">1.0</td><td class="dist">50%</td><td class="dist">5%</td>
+        <td class="teamname">NE</td>
+        <td class="gc rd">@BUF<br><span class="spread">3</span></td>
+        {_FV_CELL}</tr>
+    <tr><td class="dist">1.0</td><td class="dist">40%</td><td class="dist">2%</td>
+        <td class="teamname">LAR</td>
+        <td class="gc rd">
+          <span title="Neutral Field">(n)</span>SF<br>
+          <span class="spread">-3.5</span>
+        </td>
+        {_FV_CELL}</tr>
+    <tr><td class="dist">1.0</td><td class="dist">60%</td><td class="dist">10%</td>
+        <td class="teamname">SF</td>
+        <td class="gc rd">
+          <span title="Neutral Field">(n)</span>LAR<br>
+          <span class="spread">3.5</span>
+        </td>
+        {_FV_CELL}</tr>
+    <tr><td class="dist">-</td><td class="dist">-</td><td class="dist">-</td>
+        <td class="teamname">KC</td>
+        <td class="gc bye">BYE</td>
+        {_FV_CELL}</tr>
+  </tbody>
+</table>
+"""
+
+
+def test_dedupe_keeps_one_row_for_a_normal_home_away_game():
+    grid = parse_schedule_grid(NEUTRAL_GAME_HTML, start_week=1)
+    games = dedupe_schedule_games(grid)
+    buf_ne = games[(games.home_team == "BUF") & (games.away_team == "NE")]
+    assert len(buf_ne) == 1
+    assert buf_ne.iloc[0]["home_spread"] == pytest.approx(-3.0)
+
+
+def test_dedupe_recovers_neutral_site_game_marked_away_on_both_sides():
+    grid = parse_schedule_grid(NEUTRAL_GAME_HTML, start_week=1)
+    games = dedupe_schedule_games(grid)
+    neutral_game = games[
+        ((games.home_team == "LAR") & (games.away_team == "SF"))
+        | ((games.home_team == "SF") & (games.away_team == "LAR"))
+    ]
+    assert len(neutral_game) == 1  # not dropped, and not duplicated
+
+
+def test_dedupe_excludes_bye_weeks():
+    grid = parse_schedule_grid(NEUTRAL_GAME_HTML, start_week=1)
+    games = dedupe_schedule_games(grid)
+    assert not (games.home_team == "KC").any()
+    assert not (games.away_team == "KC").any()
+
+
+def test_dedupe_total_game_count():
+    grid = parse_schedule_grid(NEUTRAL_GAME_HTML, start_week=1)
+    games = dedupe_schedule_games(grid)
+    assert len(games) == 2  # BUF/NE and LAR/SF -- KC's bye contributes nothing
 
 
 def test_extracts_win_result():

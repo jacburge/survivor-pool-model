@@ -94,6 +94,28 @@ def test_fit_weekly_rating_std_from_history():
     assert std > 0
 
 
+def test_fit_weekly_rating_std_does_not_diff_across_season_boundary():
+    # A huge jump between the last week of one season and the first week of
+    # the next must not be treated as a "one week" change.
+    season_a = pd.DataFrame({"NE": [1.0, 1.1, 0.9]}, index=[16, 17, 18])
+    season_b = pd.DataFrame({"NE": [50.0, 50.1, 49.9]}, index=[1, 2, 3])  # unrelated roster/rating scale
+
+    combined_std = fit_weekly_rating_std([season_a, season_b])
+    within_season_only = fit_weekly_rating_std(season_a)
+    # the huge cross-season jump (~49 points) must not leak into the pooled
+    # estimate -- it should look like within-season noise, not blow up
+    assert combined_std < 5 * within_season_only
+
+
+def test_fit_weekly_rating_std_pools_multiple_seasons():
+    season_a = pd.DataFrame({"NE": [1.0, 2.0, 3.0]}, index=[1, 2, 3])
+    season_b = pd.DataFrame({"NE": [1.0, 2.0, 3.0]}, index=[1, 2, 3])
+    pooled = fit_weekly_rating_std([season_a, season_b])
+    single = fit_weekly_rating_std(season_a)
+    # identical seasons pooled should give the same std as either one alone
+    assert pooled == pytest.approx(single)
+
+
 def test_default_ridge_is_zero():
     # Regression guard for the finding in ratings.py: ridge only ever hurt
     # accuracy on real data, since minimum-norm already handles disconnected
