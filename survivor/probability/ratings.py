@@ -36,6 +36,21 @@ class RatingFit:
 # ratings) to regularize toward instead of a flat 0.
 DEFAULT_RIDGE = 0.0
 
+# Calibrated against real historical elimination curves
+# (scripts/validate_elimination_curve.py), not fit directly -- there's no
+# multi-week rating history yet to feed fit_weekly_rating_std. Counter-
+# intuitive finding along the way: *raising* this makes the simulated field
+# survive *more*, not less. A larger std widens each path's spread of
+# sampled true team strength, which makes games more lopsided, which makes
+# the crowd-favored team (the one most rivals pick, via the popularity
+# model) win more predictably -- fewer upsets against the crowd, not more.
+# At the original placeholder of 1.5, the simulated field matched real
+# 2023-2025 survival rates early-season but over-survived late-season by
+# 3x (1.9% vs. a real 0.4-0.6% by week 18, 500-rival field). Lowering to
+# 1.0 put every checkpoint within the real historical range. Revisit once
+# real week-over-week rating history exists to fit this properly.
+DEFAULT_WEEKLY_RATING_STD = 1.0
+
 
 def fit_team_ratings(games: pd.DataFrame, ridge: float = 0.0) -> RatingFit:
     """Least squares fit of one rating per team plus home-field advantage.

@@ -32,11 +32,13 @@ def fetch_week_html(year: int, week: int) -> str:
 
 
 def parse_pick_grid(html: str) -> pd.DataFrame:
-    """Parse the grid table into one row per team: expected_value, win_probability, pick_percentage.
+    """Parse the grid table into one row per team: expected_value, win_probability, pick_percentage, result.
 
     A team's cell reads e.g. "PHI" (upcoming week) or "PHI\xa0(W)" (a
-    played week, with the result appended) -- the leading run of capital
-    letters is the team abbreviation either way.
+    played week, with the result appended in a resultW/resultL span) -- the
+    leading run of capital letters is the team abbreviation either way.
+    result is "W", "L", or None (upcoming week, or a historical week with
+    no game -- a bye).
     """
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", id="grid")
@@ -49,15 +51,18 @@ def parse_pick_grid(html: str) -> pd.DataFrame:
         team_match = TEAM_PATTERN.match(cells[3].get_text())
         if team_match is None:
             continue
+        result_span = cells[3].find("span", class_=["resultW", "resultL"])
+        result = result_span["class"][0][-1] if result_span else None  # "resultW" -> "W", "resultL" -> "L"
         rows.append(
             {
                 "team": to_abbreviation(team_match.group()),
                 "expected_value": _parse_float(cells[0].get_text(strip=True)),
                 "win_probability": _parse_percent(cells[1].get_text(strip=True)),
                 "pick_percentage": _parse_percent(cells[2].get_text(strip=True)),
+                "result": result,
             }
         )
-    return pd.DataFrame(rows, columns=["team", "expected_value", "win_probability", "pick_percentage"])
+    return pd.DataFrame(rows, columns=["team", "expected_value", "win_probability", "pick_percentage", "result"])
 
 
 def _parse_percent(text: str) -> float | None:

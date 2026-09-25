@@ -35,6 +35,12 @@ SAMPLE_GRID_HTML = """
       <td class="dist">-</td>
       <td class="teamname">MIN</td>
     </tr>
+    <tr id="t5">
+      <td class="dist">0.30</td>
+      <td class="dist">22.0%</td>
+      <td class="dist">1.0%</td>
+      <td class="teamname">DAL<span class="resultL">&nbsp;(L)</span></td>
+    </tr>
   </tbody>
 </table>
 """
@@ -42,8 +48,8 @@ SAMPLE_GRID_HTML = """
 
 def test_parses_one_row_per_team():
     df = parse_pick_grid(SAMPLE_GRID_HTML)
-    assert len(df) == 4
-    assert set(df["team"]) == {"PHI", "KC", "WAS", "MIN"}
+    assert len(df) == 5
+    assert set(df["team"]) == {"PHI", "KC", "WAS", "MIN", "DAL"}
 
 
 def test_strips_result_marker_from_played_week():
@@ -78,3 +84,18 @@ def test_pick_percentages_are_plausible_fractions():
 def test_missing_table_raises():
     with pytest.raises(ValueError):
         parse_pick_grid("<html><body>no grid here</body></html>")
+
+
+def test_extracts_win_result():
+    df = parse_pick_grid(SAMPLE_GRID_HTML)
+    assert df[df["team"] == "PHI"].iloc[0]["result"] == "W"
+
+
+def test_extracts_loss_result():
+    df = parse_pick_grid(SAMPLE_GRID_HTML)
+    assert df[df["team"] == "DAL"].iloc[0]["result"] == "L"
+
+
+def test_upcoming_week_has_no_result():
+    df = parse_pick_grid(SAMPLE_GRID_HTML)
+    assert pd.isna(df[df["team"] == "KC"].iloc[0]["result"])
