@@ -9,6 +9,7 @@ dependencies = [
     "pandas>=2.1",
     "requests>=2.31",
     "python-dotenv>=1.0",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]
@@ -18,3 +19,6 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["survivor*"]

@@ -47,9 +47,18 @@ ABBREVIATION_TO_FULL_NAME: dict[str, str] = {v: k for k, v in FULL_NAME_TO_ABBRE
 
 assert len(FULL_NAME_TO_ABBREVIATION) == 32, "expected exactly 32 NFL teams"
 
+# Alternate abbreviations used by other sources, mapped to the canonical one
+# above. Confirmed: SurvivorGrid uses WSH for Washington where the odds and
+# schedule sources use WAS. Add more here as new sources reveal them.
+ABBREVIATION_ALIASES: dict[str, str] = {
+    "WSH": "WAS",
+}
+
 
 def to_abbreviation(team_name: str) -> str:
-    """Map any known full team name to its abbreviation; passes through if already an abbreviation."""
+    """Map any known full team name or alias abbreviation to the canonical abbreviation."""
+    if team_name in ABBREVIATION_ALIASES:
+        return ABBREVIATION_ALIASES[team_name]
     if team_name in ABBREVIATION_TO_FULL_NAME:
         return team_name
     try:

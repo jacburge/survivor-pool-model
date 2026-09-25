@@ -21,6 +21,11 @@ def test_abbreviation_passes_through():
     assert to_abbreviation("BUF") == "BUF"
 
 
+def test_alias_abbreviation_maps_to_canonical():
+    # SurvivorGrid uses WSH where the odds/schedule sources use WAS.
+    assert to_abbreviation("WSH") == "WAS"
+
+
 def test_unknown_team_raises():
     with pytest.raises(KeyError):
         to_abbreviation("Springfield Isotopes")
