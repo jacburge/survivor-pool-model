@@ -47,8 +47,27 @@ DEFAULT_RIDGE = 0.0
 # At the original placeholder of 1.5, the simulated field matched real
 # 2023-2025 survival rates early-season but over-survived late-season by
 # 3x (1.9% vs. a real 0.4-0.6% by week 18, 500-rival field). Lowering to
-# 1.0 put every checkpoint within the real historical range. Revisit once
-# real week-over-week rating history exists to fit this properly.
+# 1.0 put every checkpoint within the real historical range.
+#
+# Real week-over-week rating history now exists (survivor.data.rating_history,
+# backfilled from 2023-2025 via scripts/backfill_rating_history.py) and was
+# used to try to fit this properly -- but it doesn't cleanly hand over a
+# better number. The naive week-over-week diff std is 3.04, way above 1.0.
+# Decomposing Var(diff) by lag (a random-walk-plus-noise model:
+# Var(diff at lag k) = k*sigma_drift^2 + 2*sigma_noise^2) shows that's
+# almost entirely single-week-fit estimation noise (sigma_noise=2.16), not
+# real team-strength drift (sigma_drift=0.40) -- autocorrelation across
+# weeks is ~flat (0.36-0.42) from lag 1 to lag 8 rather than decaying, which
+# is the signature of noise dominating a slow-moving true signal. Neither
+# 0.40 (too low -- ignores that this week's own base rating is itself
+# uncertain) nor 3.04 (too high -- double-counts that same noise) is right
+# for this single-parameter model, which conflates "how uncertain is the
+# base rating itself" with "how much does true strength drift going
+# forward" into one growing term (weekly_std * sqrt(weeks_ahead), zero at
+# weeks_ahead=0). A two-parameter model (a fixed noise floor plus a small
+# growing drift term) would use these measurements directly and is the
+# right fix if this becomes a priority -- deliberately deferred for now in
+# favor of the simpler, already-end-to-end-validated single constant.
 DEFAULT_WEEKLY_RATING_STD = 1.0
 
 
