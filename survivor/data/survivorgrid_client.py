@@ -65,6 +65,57 @@ def parse_pick_grid(html: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["team", "expected_value", "win_probability", "pick_percentage", "result"])
 
 
+def parse_schedule_grid(html: str, start_week: int) -> pd.DataFrame:
+    """Parse the same grid's per-week opponent/spread columns into one row per (team, week).
+
+    The page for /{year}/{week} shows one "gc" column per remaining week,
+    from start_week through 18, one row per team. A cell reads e.g.
+    "ARI<br><span>-9.5</span>" (team is home, favored by 9.5) or
+    "@BUF<br><span>+3</span>" (team is away, a 3-point underdog) or "BYE".
+    spread is always the row team's own spread, matching
+    ratings.fit_team_ratings' home_spread convention when is_home is True.
+
+    Combined with parse_pick_grid's win_probability/pick_percentage for
+    start_week specifically, this is enough to fit ratings and run the
+    simulator from a single page pull -- no other odds source needed,
+    including for weeks that have already passed this season (useful for
+    backtesting what the pipeline would have recommended at the time).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", id="grid")
+    if table is None:
+        raise ValueError("could not find the pick grid table in the page")
+
+    rows = []
+    for tr in table.find("tbody").find_all("tr"):
+        cells = tr.find_all("td")
+        team_match = TEAM_PATTERN.match(cells[3].get_text())
+        if team_match is None:
+            continue
+        team = to_abbreviation(team_match.group())
+
+        for offset, cell in enumerate(cells[4:-1]):  # last cell is the "fv" star rating, not a week
+            week = start_week + offset
+            if "bye" in cell.get("class", []):
+                rows.append({"team": team, "week": week, "opponent": None, "is_home": None,
+                             "spread": None, "is_bye": True})
+                continue
+            is_home = "rd" not in cell.get("class", [])
+            opponent_match = TEAM_PATTERN.search(cell.get_text())
+            spread_span = cell.find("span", class_="spread")
+            rows.append(
+                {
+                    "team": team,
+                    "week": week,
+                    "opponent": to_abbreviation(opponent_match.group()) if opponent_match else None,
+                    "is_home": is_home,
+                    "spread": _parse_float(spread_span.get_text(strip=True)) if spread_span else None,
+                    "is_bye": False,
+                }
+            )
+    return pd.DataFrame(rows, columns=["team", "week", "opponent", "is_home", "spread", "is_bye"])
+
+
 def _parse_percent(text: str) -> float | None:
     text = text.strip()
     try:

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from survivor.data.survivorgrid_client import parse_pick_grid
+from survivor.data.survivorgrid_client import parse_pick_grid, parse_schedule_grid
 
 # A minimal fixture mirroring survivorgrid.com's real table structure (verified
 # via a live raw-HTML pull): four <td class="dist"> for EV/W%/P%, a
@@ -84,6 +84,86 @@ def test_pick_percentages_are_plausible_fractions():
 def test_missing_table_raises():
     with pytest.raises(ValueError):
         parse_pick_grid("<html><body>no grid here</body></html>")
+
+
+SCHEDULE_GRID_HTML = """
+<table class="datatable" id="grid">
+  <thead><tr><th>EV</th><th>W%</th><th>P%</th><th>Team</th><th>1</th><th>2</th><th>3</th></tr></thead>
+  <tbody>
+    <tr id="t1">
+      <td class="dist">1.07</td>
+      <td class="dist">79.8%</td>
+      <td class="dist">26.8%</td>
+      <td class="teamname">LAC</td>
+      <td class="gc g19">
+        ARI<br>
+        <span class="spread">-9.5</span>
+      </td>
+      <td class="gc rd">
+        @BUF<br>
+        <span class="spread">3</span>
+      </td>
+      <td class="gc bye">BYE</td>
+      <td class="fv" data-sort-value="0.47"><div class="starrating"></div></td>
+    </tr>
+    <tr id="t2">
+      <td class="dist">0.80</td>
+      <td class="dist">60.0%</td>
+      <td class="dist">5.0%</td>
+      <td class="teamname">SF</td>
+      <td class="gc g6 rd">
+        <span style="font-size: 9px;" title="Neutral Field">(n)</span>MIN<br>
+        <span class="spread">-3</span>
+      </td>
+      <td class="gc g2">
+        DEN<br>
+        <span class="spread">-3.5</span>
+      </td>
+      <td class="gc rd dv">
+        @SEA<br>
+        <span class="spread">3</span>
+      </td>
+      <td class="fv" data-sort-value="0.5"><div class="starrating"></div></td>
+    </tr>
+  </tbody>
+</table>
+"""
+
+
+def test_schedule_grid_parses_home_and_away_with_own_spread():
+    df = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=1)
+    lac_week1 = df[(df.team == "LAC") & (df.week == 1)].iloc[0]
+    assert lac_week1["opponent"] == "ARI"
+    assert lac_week1["is_home"] is True
+    assert lac_week1["spread"] == pytest.approx(-9.5)
+
+    lac_week2 = df[(df.team == "LAC") & (df.week == 2)].iloc[0]
+    assert lac_week2["opponent"] == "BUF"
+    assert lac_week2["is_home"] is False
+    assert lac_week2["spread"] == pytest.approx(3.0)
+
+
+def test_schedule_grid_marks_bye_week():
+    df = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=1)
+    lac_week3 = df[(df.team == "LAC") & (df.week == 3)].iloc[0]
+    assert bool(lac_week3["is_bye"])
+    assert pd.isna(lac_week3["opponent"])
+    assert pd.isna(lac_week3["spread"])
+
+
+def test_schedule_grid_handles_neutral_site_marker():
+    df = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=1)
+    sf_week1 = df[(df.team == "SF") & (df.week == 1)].iloc[0]
+    assert sf_week1["opponent"] == "MIN"
+    assert sf_week1["is_home"] is False  # "rd" class present despite the (n) marker
+
+
+def test_schedule_grid_week_numbers_offset_from_start_week():
+    df = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=1)
+    assert set(df[df.team == "LAC"]["week"]) == {1, 2, 3}
+
+    df_offset = parse_schedule_grid(SCHEDULE_GRID_HTML, start_week=5)
+    assert set(df_offset[df_offset.team == "LAC"]["week"]) == {5, 6, 7}
 
 
 def test_extracts_win_result():
