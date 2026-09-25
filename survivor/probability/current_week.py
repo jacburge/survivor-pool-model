@@ -105,3 +105,29 @@ def to_team_survival_probabilities(current_week: pd.DataFrame) -> pd.Series:
     home = current_week.set_index("home_team")["home_survival_probability"]
     away = current_week.set_index("away_team")["away_survival_probability"]
     return pd.concat([home, away]).sort_index()
+
+
+def compute_current_week_spreads(odds_df: pd.DataFrame) -> pd.DataFrame:
+    """Consensus home-team point spread per game, averaged across books.
+
+    Unlike moneylines, a spread's price doesn't need devigging -- the point
+    itself is the line. Different books quote slightly different points
+    (e.g. -7 vs -7.5); averaging them is the consensus. Feeds
+    survivor.probability.ratings.fit_team_ratings.
+    """
+    spreads = odds_df[odds_df["market"] == "spreads"]
+    rows = []
+    for game_id, game_rows in spreads.groupby("game_id"):
+        home_team = game_rows["home_team"].iloc[0]
+        home_points = game_rows.loc[game_rows["team"] == home_team, "point"]
+        rows.append(
+            {
+                "game_id": game_id,
+                "commence_time": game_rows["commence_time"].iloc[0],
+                "home_team": home_team,
+                "away_team": game_rows["away_team"].iloc[0],
+                "home_spread": home_points.mean(),
+                "num_books": home_points.count(),
+            }
+        )
+    return pd.DataFrame(rows, columns=["game_id", "commence_time", "home_team", "away_team", "home_spread", "num_books"])

@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from survivor.probability.ratings import (
+    DEFAULT_RIDGE,
     fit_team_ratings,
     fit_weekly_rating_std,
     projected_rating_std,
@@ -91,3 +92,49 @@ def test_fit_weekly_rating_std_from_history():
     )
     std = fit_weekly_rating_std(history)
     assert std > 0
+
+
+def test_default_ridge_is_zero():
+    # Regression guard for the finding in ratings.py: ridge only ever hurt
+    # accuracy on real data, since minimum-norm already handles disconnected
+    # components on its own.
+    assert DEFAULT_RIDGE == 0.0
+
+
+def test_minimum_norm_centers_disconnected_components_without_ridge():
+    # Two disconnected components: an isolated pair (A, B), and a connected
+    # three-team chain (C-D-E). Nothing ties one component's level to the
+    # other's, yet minimum-norm least squares should still center each
+    # component's own mean rating at 0, unaided by ridge.
+    games = pd.DataFrame(
+        [
+            {"home_team": "A", "away_team": "B", "home_spread": -20.0},
+            {"home_team": "C", "away_team": "D", "home_spread": -3.0},
+            {"home_team": "D", "away_team": "E", "home_spread": 2.0},
+        ]
+    )
+    fit = fit_team_ratings(games, ridge=0.0)
+    assert (fit.ratings["A"] + fit.ratings["B"]) / 2 == pytest.approx(0.0, abs=1e-9)
+    assert (fit.ratings["C"] + fit.ratings["D"] + fit.ratings["E"]) / 3 == pytest.approx(0.0, abs=1e-9)
+
+
+def test_ridge_shrinks_ratings_toward_zero():
+    games = pd.DataFrame([{"home_team": "A", "away_team": "B", "home_spread": -14.0}])
+    unregularized = fit_team_ratings(games, ridge=0.0)
+    regularized = fit_team_ratings(games, ridge=1.0)
+    assert abs(regularized.ratings["A"]) < abs(unregularized.ratings["A"])
+
+
+def test_ridge_trades_off_in_sample_fit_quality():
+    true_ratings = {"NE": 3.0, "NYJ": -2.0, "BUF": 5.0, "MIA": -1.0}
+    matchups = [
+        ("NE", "NYJ"), ("NYJ", "NE"),
+        ("BUF", "MIA"), ("MIA", "BUF"),
+        ("NE", "MIA"), ("MIA", "NE"),
+        ("BUF", "NYJ"), ("NYJ", "BUF"),
+    ]
+    games = _synthetic_games(true_ratings, 2.0, matchups)
+
+    no_ridge_mae = fit_team_ratings(games, ridge=0.0).residuals.abs().mean()
+    with_ridge_mae = fit_team_ratings(games, ridge=1.0).residuals.abs().mean()
+    assert with_ridge_mae > no_ridge_mae

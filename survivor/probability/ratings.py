@@ -23,12 +23,45 @@ class RatingFit:
     residuals: pd.Series  # fitted spread minus observed spread, per game
 
 
-def fit_team_ratings(games: pd.DataFrame) -> RatingFit:
+# 0.0 by default. ridge exists as an escape hatch, not a default need: numpy's
+# minimum-norm lstsq solution already centers each disconnected schedule-graph
+# component's mean rating at exactly 0 on its own (verified on real Week 3,
+# 2026 data with a 6-team/24-team split -- the cross-component gap is ~0.000
+# at every ridge level tested, including 0). Adding ridge on top of that only
+# shrank well-determined within-component ratings, worsening both in-sample
+# fit and Week 4 holdout accuracy at every positive value tried
+# (scripts/validate_ratings.py). Keep ridge=0 until there's a component so
+# sparsely connected (few games relative to teams) that variance reduction
+# actually earns its keep, or an external prior (e.g. preseason power
+# ratings) to regularize toward instead of a flat 0.
+DEFAULT_RIDGE = 0.0
+
+
+def fit_team_ratings(games: pd.DataFrame, ridge: float = 0.0) -> RatingFit:
     """Least squares fit of one rating per team plus home-field advantage.
 
     games must have columns: home_team, away_team, home_spread (bookmaker
     spread for the home team; negative means the home team is favored).
     Fits -home_spread ~= r_home - r_away + h.
+
+    A single week's games is a perfect matching -- 32 teams paired into 16
+    disjoint games with no edges between pairs -- so within a pair, only
+    the rating *difference* is pinned by that game; nothing ties one pair's
+    level to another's. Even two weeks combined can leave the schedule
+    graph split into disconnected components (real Week 3+4, 2026 data
+    does: a 6-team cluster and a 24-team cluster). This turns out to be
+    less of a problem than it looks: numpy's minimum-norm solution already
+    centers each disconnected component's mean rating at exactly 0 on its
+    own (verified on the real 6/24 split -- the cross-component gap is
+    ~0.000), which is the same "assume unknown teams are average" prior
+    ridge would otherwise add. ridge > 0 additionally shrinks every team's
+    rating toward 0, trading fit quality for variance reduction; on real
+    data this only ever made both in-sample fit and Week 4 holdout accuracy
+    worse (see DEFAULT_RIDGE), since a single-book-consensus spread is
+    already a fairly reliable data point, not a noisy one. Keep ridge=0
+    unless a component is so sparsely connected that shrinkage's variance
+    reduction is worth its bias, or there's an external prior to shrink
+    toward instead of a flat 0.
     """
     teams = sorted(set(games["home_team"]) | set(games["away_team"]))
     team_index = {team: i for i, team in enumerate(teams)}
@@ -48,6 +81,12 @@ def fit_team_ratings(games: pd.DataFrame) -> RatingFit:
     # Extra row pins sum(ratings) = 0 to resolve the additive degeneracy.
     design[n_games, :n_teams] = 1.0
     target[n_games] = 0.0
+
+    if ridge > 0:
+        ridge_rows = np.zeros((n_teams, n_teams + 1))
+        ridge_rows[:, :n_teams] = np.eye(n_teams) * np.sqrt(ridge)
+        design = np.vstack([design, ridge_rows])
+        target = np.concatenate([target, np.zeros(n_teams)])
 
     solution, _, _, _ = np.linalg.lstsq(design, target, rcond=None)
     ratings = {team: solution[team_index[team]] for team in teams}
