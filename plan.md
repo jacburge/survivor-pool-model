@@ -1,5 +1,17 @@
 NFL Survivor Pool Model: Planning Document
 Sep 24, 2026 · @Megan
+Progress as of September 25, 2026
+Phases 0 through 5 are done, all in one day and well ahead of the Sep 25-Oct 2 schedule below. See README.md for how to run things and the one open validation gap. Status by phase:
+ Phase 0 (Rules and data access): not separately logged as a written confirmation, but every downstream phase proceeded on the Goal section's assumptions without hitting a blocker, so treat it as resolved unless something surfaces.
+ Phase 1 (Data ingestion): done. Odds, schedule, and SurvivorGrid pick-percentage clients are built and tested, team keys normalize across all three sources, and scripts/refresh_all.py is the one-command refresh.
+ Phase 2 (Current-week probabilities): done. Devig plus tie adjustment is wired to real odds and validated against a published devigged consensus (scripts/validate_current_week.py).
+ Phase 3 (Future-week probabilities): done, with one open item. The rating fit meets the in-sample spread-reproduction bar; the lookahead cross-check bar (projections within ~1.5 points of real lookahead lines) had not been met as of the first Phase 3 commit ("in-sample bar met, lookahead not yet") — rerun scripts/validate_ratings.py as more lookahead weeks of real data accumulate. Separately, DEFAULT_WEEKLY_RATING_STD (weekly rating-uncertainty) was revisited using real week-over-week rating history (survivor/data/rating_history.py, backfilled from 2023-2025) and kept at 1.0 rather than either raw calibration estimate; the reasoning is recorded as a comment on DEFAULT_WEEKLY_RATING_STD in survivor/probability/ratings.py.
+ Phase 4 (Pick popularity model): done. The softmax popularity model is fit and beats both the uniform and win-probability-proportional baselines on held-out historical log loss.
+ Phase 5 (Field simulator and rollout scoring): done, all three acceptance criteria met against real Phase 1-4 data (80,000 paths, ~500 rivals, Weeks 4-18) — see scripts/validate_simulator.py and validate_elimination_curve.py.
+ Extra validation beyond the phase list: scripts/backtest_week1.py ran the full pipeline blind against real Week 1, 2026 pre-game data, never reading the result until after the recommendation was produced. It recommended DET (which survived), and surfaced and fixed a real SurvivorGrid neutral-site parsing bug along the way.
+ Phase 6 (Portfolio allocation): not started. survivor/decision/payout.py has portfolio_expected_payout, which sums expected payout across entries on shared simulated paths, but nothing yet enumerates or scores 10-entry allocations across candidate teams. This is the next build item, needed before October 3.
+ Phase 7 (Lock day): not started — scheduled for October 1 (Thursday option only) and October 4.
+ Phase 8 (In-season additions): only the rival tracker's storage layer is built ahead of need (survivor/data/rival_tracker.py: record/read revealed picks, used-team sets, per-week pick distributions). It has no real data yet since Week 4 hasn't happened. Popularity refinement from the tracked field, split-decision logic, and the exact endgame dynamic program are all not started.
 Goal
 Build a decision pipeline that maximizes expected total payout across 10 entries in the traino Splash Sports survivor pool, and have it producing a Week 4 recommendation before the Sunday, October 4, 1:00 PM Eastern lock.
 Planning assumptions:
