@@ -228,57 +228,73 @@ def simulate_rival_field(
     )
 
 
+def team_elimination_week(sim: FieldSimulation, team: str, used_teams_before: set[str] | None = None) -> np.ndarray:
+    """Per-path elimination week for one candidate team's entry, -1 if it survives every week in sim.weeks.
+
+    This week's pick is fixed to `team`; future weeks follow the
+    max-survival assignment base policy (solved once per path, since
+    ratings -- and so the optimal assignment -- differ by path).
+
+    Shared by score_candidate (Phase 5, scoring one entry against the
+    rival field) and survivor.decision.portfolio (Phase 6, scoring many of
+    your own entries jointly): the expensive part here is the per-path
+    assignment solve, which depends only on the candidate team and its
+    used-teams history, not on how many of your entries end up on it. Phase
+    6 calls this once per candidate team and reuses the result across every
+    allocation that uses that team.
+    """
+    used_teams_before = used_teams_before or set()
+    excluded = used_teams_before | {team}
+    future_weeks = sim.weeks[1:]
+
+    eliminated_week = np.full(sim.n_paths, -1, dtype=int)
+    for path in range(sim.n_paths):
+        picks: dict[int, str] = {sim.weeks[0]: team}
+        if future_weeks:
+            survival_lookup = {}
+            for w_idx, week in enumerate(future_weeks, start=1):
+                week_probs = {}
+                for other_team in ALL_TEAMS:
+                    if other_team in excluded or not sim.playing[w_idx, TEAM_INDEX[other_team]]:
+                        continue
+                    week_probs[other_team] = sim.survival_probability[w_idx, path, TEAM_INDEX[other_team]]
+                survival_lookup[week] = week_probs
+            picks.update(assign_max_survival_picks(future_weeks, survival_lookup))
+
+        for w_idx, week in enumerate(sim.weeks):
+            if not sim.team_wins[w_idx, path, TEAM_INDEX[picks[week]]]:
+                eliminated_week[path] = week
+                break
+
+    return eliminated_week
+
+
 def score_candidate(sim: FieldSimulation, current_pick: str, used_teams_before: set[str] | None = None) -> np.ndarray:
     """Expected payout per path for one candidate entry: this week's pick, future weeks via max-survival.
 
     Returns an array of shape (n_paths,) -- the payout on each simulated
     path. Its mean is the candidate's Monte Carlo expected payout.
+
+    Assumes this is your only entry in the field (the "+1" below). Scoring
+    several of your own entries together -- where they can end up sharing a
+    winner set with each other, not just with rivals -- needs
+    survivor.decision.portfolio.score_allocation instead.
     """
-    used_teams_before = used_teams_before or set()
-    excluded = used_teams_before | {current_pick}
-    future_weeks = sim.weeks[1:]
+    eliminated_week = team_elimination_week(sim, current_pick, used_teams_before)
 
-    payouts = np.zeros(sim.n_paths)
-    current_pick_idx = TEAM_INDEX[current_pick]
+    # survived the whole horizon -- shares the pot with however many rivals
+    # also made it, or wins outright if the rival field emptied out at some
+    # earlier week while your entry kept going (simplified to a full-pot
+    # win rather than simulating a 1-entry "competition" for the remaining
+    # weeks -- it changes nothing real).
+    survived = sim.pot / (sim.rival_survivors + 1)
+    outlasted_emptied_field = np.full(sim.n_paths, sim.pot)
+    # eliminated the same week the rival field emptied out entirely: that
+    # whole cohort splits the pot, per the plan's payout rule
+    in_emptying_cohort = sim.pot / (sim.emptying_cohort_size + 1)
 
-    for path in range(sim.n_paths):
-        # your own week-by-week picks: this week fixed, future weeks via the
-        # max-survival assignment (solved once per path, since ratings --
-        # and so the optimal assignment -- differ by path)
-        picks: dict[int, str] = {sim.weeks[0]: current_pick}
-        if future_weeks:
-            survival_lookup = {}
-            for w_idx, week in enumerate(future_weeks, start=1):
-                week_probs = {}
-                for team in ALL_TEAMS:
-                    if team in excluded or not sim.playing[w_idx, TEAM_INDEX[team]]:
-                        continue
-                    week_probs[team] = sim.survival_probability[w_idx, path, TEAM_INDEX[team]]
-                survival_lookup[week] = week_probs
-            picks.update(assign_max_survival_picks(future_weeks, survival_lookup))
-
-        eliminated_week = None
-        for w_idx, week in enumerate(sim.weeks):
-            if not sim.team_wins[w_idx, path, TEAM_INDEX[picks[week]]]:
-                eliminated_week = week
-                break
-
-        if eliminated_week is None:
-            # survived the whole horizon -- shares the pot with however many
-            # rivals also made it, or wins outright if the rival field
-            # emptied out at some earlier week while your entry kept going
-            # (simplified to a full-pot win rather than simulating a
-            # 1-entry "competition" for the remaining weeks -- it changes
-            # nothing real).
-            if sim.field_emptied_week[path] == -1:
-                payouts[path] = sim.pot / (sim.rival_survivors[path] + 1)
-            else:
-                payouts[path] = sim.pot
-        elif eliminated_week == sim.field_emptied_week[path]:
-            # eliminated the same week the rival field emptied out entirely:
-            # that whole cohort splits the pot, per the plan's payout rule
-            payouts[path] = sim.pot / (sim.emptying_cohort_size[path] + 1)
-        else:
-            payouts[path] = 0.0
-
-    return payouts
+    return np.where(
+        eliminated_week == -1,
+        np.where(sim.field_emptied_week == -1, survived, outlasted_emptied_field),
+        np.where(eliminated_week == sim.field_emptied_week, in_emptying_cohort, 0.0),
+    )
