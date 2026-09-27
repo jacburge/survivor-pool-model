@@ -4,6 +4,30 @@ Decision pipeline for the NFL survivor pool. See [plan.md](plan.md) for the
 full design (goal, method, phases, technical notes) and its "Progress"
 section at the top for phase-by-phase status.
 
+## How it works
+
+Data flows from three free/cheap sources through four layers to a weekly
+pick sheet; revealed picks feed back into the popularity model each week
+(dashed edge). Module paths are the actual code behind each box.
+
+```mermaid
+flowchart LR
+    A["Odds API<br/>moneylines, spreads"] --> D["Devig + tie adjustment<br/>survivor/probability/devig.py, current_week.py"]
+    B["Schedule store<br/>survivor/data/schedule_client.py"] --> E["Rating fit + projection<br/>survivor/probability/ratings.py"]
+    D --> E
+    C["Pick data: SurvivorGrid + rival tracker<br/>survivor/data/survivorgrid_client.py, rival_tracker.py"] --> F["Popularity model<br/>survivor/decision/popularity.py"]
+    E --> G["Field simulator<br/>survivor/simulation/field_simulator.py"]
+    F --> G
+    G --> H["Rollout scoring<br/>field_simulator.score_candidate"]
+    H --> I["Portfolio allocation<br/>survivor/decision/portfolio.py"]
+    I --> J["Weekly pick sheet"]
+    J -.->|revealed picks| F
+```
+
+Everything through the portfolio allocation box (Phases 0-6) is built and
+tested; the pick sheet and feedback loop (Phases 7-8) are still open — see
+Status below.
+
 ## Setup
 
 ```bash
@@ -46,29 +70,32 @@ to already be populated.
   tracker.
 - `survivor/probability/` — devigging, spread-to-probability, team rating
   fit and projection (Phases 2-3).
-- `survivor/decision/` — pick popularity model, payout objective (Phases 4,
-  6).
+- `survivor/decision/` — pick popularity model, payout objective, and joint
+  portfolio allocation across entries (Phases 4, 6).
 - `survivor/simulation/` — field simulator, base-policy assignment, and
   rollout scoring (Phase 5).
 
 ## Status
 
-Phases 0 through 5 are done and validated against real data — data
-ingestion, current- and future-week win probabilities, the pick popularity
-model, and the Monte Carlo field simulator with rollout scoring all wired
-up and tested (121 tests passing). A blind Week 1, 2026 backtest
+Phases 0 through 6 are done — data ingestion, current- and future-week win
+probabilities, the pick popularity model, the Monte Carlo field simulator
+with rollout scoring, and joint portfolio allocation across entries, all
+wired up and tested (138 tests passing). A blind Week 1, 2026 backtest
 (`scripts/backtest_week1.py`) ran the full pipeline end to end successfully.
 
-One open validation gap: Phase 3's lookahead cross-check (projected spreads
-within ~1.5 points of real lookahead lines) hadn't passed as of its first
-commit — worth rechecking as more lookahead weeks of real data build up.
+Two open items: Phase 3's lookahead cross-check (projected spreads within
+~1.5 points of real lookahead lines) hadn't passed as of its first commit —
+worth rechecking as more lookahead weeks of real data build up. Phase 6's
+stability validation (same top allocation across 5 random seeds, survives a
+2 percentage point probability shift) hasn't been run yet — needs a
+`validate_portfolio.py` script and real data.
 
-Not yet built: Phase 6 (joint 10-entry portfolio allocation — the next
-task, needed before October 3), Phase 7 (lock-day submission), and most of
-Phase 8 (only the rival tracker's storage layer exists so far; popularity
-refinement from the tracked field, split-decision logic, and the exact
-endgame solver are still open). See [plan.md](plan.md)'s "Progress" section
-for the full phase-by-phase breakdown.
+Not yet built: Phase 7 (lock-day submission), most of Phase 8 (only the
+rival tracker's storage layer exists so far; popularity refinement from the
+tracked field, split-decision logic, and the exact endgame solver are still
+open), and Phase 9 (a hosted, multi-user/multi-league version — planned in
+plan.md, not started). See [plan.md](plan.md)'s "Progress" section for the
+full phase-by-phase breakdown.
 
 This checkout has no `.env` or `data_store/` populated (both git-ignored) —
 run the Setup and "Pull real data" steps above before running scripts that
