@@ -19,27 +19,36 @@ silently feeding the model a stale snapshot from some other week instead).
 
 Fits current-week ratings from real spreads (Phase 3), gets real
 current-week survival probabilities via Shin devig (Phase 2), runs the
-field simulator through Week 18 (Phase 5), then recommends an allocation
-via greedy_local_allocation over every team playing this week (Phase 6) --
-found to meaningfully beat exhaustive search restricted to a handful of
-top candidates (plan.md's Phase 6 section has the real numbers: a paired
-gap of 47.5 +/- 9.96 on real Week 4, 2026 data). Also reports the
-exhaustive top-5-by-survival-probability result as a sanity cross-check,
-using the same simulated paths so the comparison is paired, not independent.
+field simulator through Week 18 (Phase 5), then recommends a per-entry
+allocation via greedy_local_entry_allocation over every team playing this
+week (Phase 6). Also reports the same search restricted to the top 5
+candidates by survival probability as a sanity cross-check, using the same
+simulated paths so the comparison is paired, not independent -- the
+all-candidate search meaningfully beat that restricted one on real Week 3
+and Week 4, 2026 data (plan.md's Phase 6 section has the numbers).
 
-Known simplification carried over from the simulator: your entries and the
-rival field both start fresh (no prior used teams) at --week. Correct if
-none of your entries have picks locked in before that week; if they do,
-this needs a per-entry used-team tracker first (analogous to
-survivor.data.rival_tracker, but for your own entries) -- not built yet.
+Entry tracking (survivor.data.my_entries): entries are named entry_1..
+entry_N (N = --n-entries) and their history is read from
+data_store/my_entries/. Nothing recorded yet (true before Week 4) means
+every entry is alive with an empty used-teams set, which the allocation
+search handles like any other state, not a special case -- verified this
+reduces to exactly the same result greedy_local_allocation would give,
+with no runtime penalty, since team_elimination_week's cache collapses
+identical (empty) histories to one computation. Pass --record to commit
+this run's recommendation into the tracker as each entry's pick for
+--week; without it, this is a look, not a commitment. Marking who actually
+won or lost each week (record_result) is a separate, manual step for now.
 
 Runtime scales with --n-paths: precomputing elimination arrays for every
-team playing (needed for the all-candidate greedy search) is the added
-cost beyond Phase 5's own validated field-simulation runtime, since it's
-one Hungarian-assignment solve per team, not just per candidate. Rough
-budget at 500 rivals, ~32 teams playing: 20,000 paths ~9 minutes, 80,000
-paths ~35-40 minutes (over Phase 5's 30-minute bar) -- use a lower
---n-paths for a quick look and raise it for the final pre-lock run.
+team playing (needed for the all-candidate search) is the added cost
+beyond Phase 5's own validated field-simulation runtime, since it's one
+Hungarian-assignment solve per (used-teams history, team) pair -- same as
+per-team once entries share a history, as they do for a fresh --week 4.
+Rough budget at 500 rivals, ~32 teams playing, fresh entries: 20,000 paths
+~9 minutes, 80,000 paths ~35-40 minutes (over Phase 5's 30-minute bar) --
+use a lower --n-paths for a quick look and raise it for the final
+pre-lock run. Diverged histories cost more (up to one solve per distinct
+history per team, not one total).
 
 Run: .venv/bin/python scripts/run_weekly.py --week 4
 """
@@ -52,10 +61,10 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from survivor.data import schedule_client
+from survivor.data import my_entries, schedule_client
 from survivor.data.odds_client import OddsAPIClient, parse_odds_events
 from survivor.data.storage import DEFAULT_STORE_ROOT, save_raw_pull
-from survivor.decision.portfolio import best_allocations, greedy_local_allocation, score_allocation
+from survivor.decision.portfolio import greedy_local_entry_allocation, score_entries
 from survivor.probability.current_week import compute_current_week_probabilities, compute_current_week_spreads
 from survivor.probability.ratings import DEFAULT_RIDGE, fit_team_ratings
 from survivor.simulation.field_simulator import simulate_rival_field, team_elimination_week
@@ -100,6 +109,9 @@ def main() -> None:
     parser.add_argument("--skip-odds-refresh", action="store_true",
                          help="reuse data_store/odds/latest.csv instead of a live API call "
                               "(required for a past --week; see docstring)")
+    parser.add_argument("--record", action="store_true",
+                         help="commit this run's recommendation into data_store/my_entries/ "
+                              "as each entry's pick for --week (default: just look, don't commit)")
     args = parser.parse_args()
 
     print(f"Refreshing schedule (weeks {args.week}-{FINAL_WEEK}, {args.year})...")
@@ -144,31 +156,49 @@ def main() -> None:
         current_week_survival_probability=current_week_survival, rng=rng,
     )
 
-    all_teams_playing = sorted(set(week_games["home_team"]) | set(week_games["away_team"]))
-    print(f"\nPrecomputing elimination arrays for all {len(all_teams_playing)} teams playing Week {args.week}...")
-    elimination_weeks = {team: team_elimination_week(sim, team) for team in all_teams_playing}
+    entry_ids = [f"entry_{i + 1}" for i in range(args.n_entries)]
+    alive_ids = my_entries.alive_entries(entry_ids)
+    if not alive_ids:
+        raise SystemExit(f"No alive entries among {entry_ids} -- nothing to recommend.")
+    if len(alive_ids) < len(entry_ids):
+        print(f"\n{len(entry_ids) - len(alive_ids)} of {len(entry_ids)} entries already eliminated: "
+              f"{sorted(set(entry_ids) - set(alive_ids))}")
+    used_teams_by_entry = my_entries.used_teams_by_entry(alive_ids)
 
-    recommendation = greedy_local_allocation(
-        sim, all_teams_playing, n_entries=args.n_entries, elimination_weeks=elimination_weeks
-    )
-    print(f"\nRecommended allocation ({args.n_entries} entries, all {len(all_teams_playing)} teams considered):")
-    print(f"  {recommendation.allocation}")
-    print(f"  Expected payout: {recommendation.mean_payout:.2f} (SE {recommendation.standard_error:.2f})")
+    all_teams_playing = sorted(set(week_games["home_team"]) | set(week_games["away_team"]))
+    print(f"\nRecommending picks for {len(alive_ids)} alive entries across all "
+          f"{len(all_teams_playing)} teams playing Week {args.week}...")
+    recommendation = greedy_local_entry_allocation(sim, used_teams_by_entry, all_teams_playing)
+
+    team_counts: dict[str, int] = {}
+    for team in recommendation.values():
+        team_counts[team] = team_counts.get(team, 0) + 1
+    recommendation_arrays = {
+        entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        for entry_id, team in recommendation.items()
+    }
+    recommendation_payout = score_entries(sim, recommendation_arrays)
+    print(f"\nRecommended allocation ({team_counts}):")
+    for entry_id, team in sorted(recommendation.items()):
+        history = used_teams_by_entry[entry_id]
+        print(f"  {entry_id} -> {team}" + (f"  (already used: {sorted(history)})" if history else ""))
+    print(f"  Expected total payout: {recommendation_payout.mean():.2f} "
+          f"(SE {recommendation_payout.std(ddof=1) / np.sqrt(args.n_paths):.2f})")
 
     top_candidates = sorted(current_week_survival, key=current_week_survival.get, reverse=True)[:TOP_N_FOR_SANITY_CHECK]
-    top_candidates = [t for t in top_candidates if t in elimination_weeks]
-    sanity_check = best_allocations(
-        sim, top_candidates, n_entries=args.n_entries,
-        elimination_weeks={t: elimination_weeks[t] for t in top_candidates},
-    )[0]
-    print(f"\nSanity check -- exhaustive search, top {len(top_candidates)} candidates by survival probability "
-          f"({top_candidates}):")
-    print(f"  {sanity_check.allocation}")
-    print(f"  Expected payout: {sanity_check.mean_payout:.2f} (SE {sanity_check.standard_error:.2f})")
+    top_candidates = [t for t in top_candidates if t in all_teams_playing]
+    sanity_check = greedy_local_entry_allocation(sim, used_teams_by_entry, top_candidates)
+    sanity_arrays = {
+        entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        for entry_id, team in sanity_check.items()
+    }
+    sanity_payout = score_entries(sim, sanity_arrays)
+    print(f"\nSanity check -- same search, restricted to the top {len(top_candidates)} candidates by survival "
+          f"probability ({top_candidates}):")
+    print(f"  Expected total payout: {sanity_payout.mean():.2f} "
+          f"(SE {sanity_payout.std(ddof=1) / np.sqrt(args.n_paths):.2f})")
 
-    greedy_payouts = score_allocation(sim, recommendation.allocation, elimination_weeks)
-    exhaustive_payouts = score_allocation(sim, sanity_check.allocation, {t: elimination_weeks[t] for t in top_candidates})
-    diff = greedy_payouts - exhaustive_payouts
+    diff = recommendation_payout - sanity_payout
     gap, gap_se = float(diff.mean()), float(diff.std(ddof=1) / np.sqrt(args.n_paths))
     print(f"\nAll-candidate vs. top-{TOP_N_FOR_SANITY_CHECK} gap (paired): {gap:.2f}, SE {gap_se:.2f} "
           f"({'a real difference' if abs(gap) > 2 * gap_se else 'within noise at this path count -- consider them tied'})")
@@ -177,11 +207,21 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     sheet = pd.DataFrame(
-        [{"team": team, "entries": count} for team, count in recommendation.allocation.items()]
+        [
+            {"entry_id": entry_id, "team": team, "used_teams_before": ",".join(sorted(used_teams_by_entry[entry_id]))}
+            for entry_id, team in sorted(recommendation.items())
+        ]
     )
     sheet.to_csv(out_dir / f"{args.year}_week{args.week}_{timestamp}.csv", index=False)
     sheet.to_csv(out_dir / "latest.csv", index=False)
     print(f"\nSaved pick sheet to {out_dir / f'{args.year}_week{args.week}_{timestamp}.csv'}")
+
+    if args.record:
+        for entry_id, team in recommendation.items():
+            my_entries.record_pick(entry_id, args.week, team)
+        print(f"Recorded {len(recommendation)} picks into data_store/my_entries/ for Week {args.week}.")
+    else:
+        print("Not recorded (pass --record to commit this as each entry's pick for the week).")
 
 
 if __name__ == "__main__":

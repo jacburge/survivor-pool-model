@@ -283,6 +283,36 @@ def test_greedy_local_allocation_scales_to_a_large_candidate_list():
     assert set(result.allocation) <= set(TEAM_INDEX)
 
 
+def test_greedy_local_allocation_survives_a_team_emptying_mid_pass():
+    # regression test: local search moved from_team's last unit away to one
+    # to_team, removing from_team from the allocation dict entirely, then
+    # kept trying *further* to_team candidates for that same now-absent
+    # from_team within the same inner loop -- raised KeyError on
+    # `trial[from_team] -= 1` once from_team was no longer a key. This
+    #8-team, 2-week, 10-entry, all-zero-rating case reliably triggers it.
+    base_ratings = {team: 0.0 for team in TEAM_INDEX}
+    teams = list(TEAM_INDEX)[:8]
+    schedule = pd.DataFrame(
+        [
+            {"week": 4, "home_team": teams[0], "away_team": teams[1]},
+            {"week": 4, "home_team": teams[2], "away_team": teams[3]},
+            {"week": 4, "home_team": teams[4], "away_team": teams[5]},
+            {"week": 4, "home_team": teams[6], "away_team": teams[7]},
+            {"week": 5, "home_team": teams[0], "away_team": teams[2]},
+            {"week": 5, "home_team": teams[1], "away_team": teams[3]},
+            {"week": 5, "home_team": teams[4], "away_team": teams[6]},
+            {"week": 5, "home_team": teams[5], "away_team": teams[7]},
+        ]
+    )
+    rng = np.random.default_rng(5)
+    sim = simulate_rival_field(
+        schedule, base_ratings, home_field_advantage=1.0, weekly_rating_std=1.0,
+        current_week=4, final_week=5, n_paths=3000, n_rivals=100, pot=1000.0, rng=rng,
+    )
+    result = greedy_local_allocation(sim, teams, n_entries=10)  # must not raise KeyError
+    assert sum(result.allocation.values()) == 10
+
+
 # --- score_entries / greedy_local_entry_allocation: entries with diverged histories ---
 
 

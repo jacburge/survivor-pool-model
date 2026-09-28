@@ -95,12 +95,20 @@ open validation gap. Status by phase:
   fixed by adding a pairwise-swap move alongside the single-entry one.
 - **Phase 7 (Lock day):** the "weekly pick sheet" piece exists
   (`scripts/run_weekly.py`: refresh real data, fit current ratings, run the
-  simulator, recommend an entry allocation, archive it to
-  `data_store/pick_sheets/`), but the actual lock-day behaviors don't —
-  no Thursday-vs-wait stage-1/stage-2 logic, no awareness of the 1pm
-  Eastern cutoff, no submission automation, and the real field size still
-  has to be passed in by hand via `--n-rivals`. Scheduled for October 1
-  (Thursday option only) and October 4.
+  simulator, recommend a per-entry allocation via
+  `greedy_local_entry_allocation`, archive it to `data_store/pick_sheets/`,
+  and — with `--record` — commit it into `survivor/data/my_entries.py`'s
+  tracker), but the actual lock-day behaviors don't — no Thursday-vs-wait
+  stage-1/stage-2 logic, no awareness of the 1pm Eastern cutoff, no
+  submission automation, and the real field size still has to be passed in
+  by hand via `--n-rivals`. Marking who actually won or lost each week
+  (`record_result`) is still a manual step, no results feed yet. Verified
+  the empty-tracker case (true going into Week 4: every entry alive, no
+  used teams) produces byte-for-byte the same recommendation
+  `greedy_local_allocation` would have, with no extra runtime — confirmed
+  directly, not just argued, before treating it as safe to wire in
+  unconditionally rather than branching on whether history exists.
+  Scheduled for October 1 (Thursday option only) and October 4.
 - **Phase 8 (In-season additions):** only the rival tracker's storage layer
   is built ahead of need (`survivor/data/rival_tracker.py`: record/read
   revealed picks, used-team sets, per-week pick distributions). It has no

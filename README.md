@@ -47,22 +47,32 @@ cp .env.example .env   # fill in THE_ODDS_API_KEY (thin free tier: 500 req/month
 `run_weekly.py` is the actual production entry point: refreshes real data
 (schedule free/ESPN, current-week odds live via The Odds API -- on by
 default here, since a real weekly decision is exactly the case worth
-spending quota on) and recommends an allocation of your entries across
-every team playing that week, via the greedy all-candidate search (Phase
-6's validated default -- see plan.md). Saves the pick sheet to
-`data_store/pick_sheets/`.
+spending quota on) and recommends a per-entry allocation across every team
+playing that week, via `greedy_local_entry_allocation` (Phase 6). Entries
+are named `entry_1..entry_N` and their history is read from
+`survivor.data.my_entries` (`data_store/my_entries/`) -- nothing recorded
+yet (true before Week 4) just means every entry is alive with an empty
+used-teams set, handled like any other state, not a special case. Saves
+the pick sheet to `data_store/pick_sheets/`.
 
 ```bash
 .venv/bin/python scripts/run_weekly.py --week 4                         # real run, live odds pull
 .venv/bin/python scripts/run_weekly.py --week 4 --skip-odds-refresh     # reuse cached odds (or backtest a past week)
 .venv/bin/python scripts/run_weekly.py --week 4 --n-paths 5000          # quick/rough look
 .venv/bin/python scripts/run_weekly.py --week 4 --n-entries 10 --n-rivals 500
+.venv/bin/python scripts/run_weekly.py --week 4 --record                # also commit picks into data_store/my_entries/
 ```
 
 Default `--n-paths 20000` runs in a few minutes; raise it (e.g. 80000) for
 the final pre-lock decision, but see the script's own docstring for the
 runtime-vs-precision tradeoff -- precomputing elimination arrays for every
-team playing adds real time beyond Phase 5's own validated budget.
+team playing adds real time beyond Phase 5's own validated budget (more
+once entries have diverged and no longer share a used-teams history).
+
+`--record` commits this run's recommendation as each entry's pick for
+`--week`; without it, a run is just a look. Marking who actually won or
+lost (`survivor.data.my_entries.record_result`) is a separate, manual step
+for now -- there's no automated results feed yet.
 
 Known simplification: assumes your entries have no picks locked in before
 `--week` (true today -- confirm before reusing this for a mid-season week).

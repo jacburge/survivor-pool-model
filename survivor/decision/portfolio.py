@@ -338,6 +338,8 @@ def greedy_local_allocation(
             for to_team in candidate_teams:
                 if to_team == from_team:
                     continue
+                if allocation.get(from_team, 0) == 0:
+                    break  # an earlier move already this pass moved from_team's last entry away
                 trial = dict(allocation)
                 trial[from_team] -= 1
                 if trial[from_team] == 0:
