@@ -8,6 +8,7 @@ from survivor.decision.portfolio import (
     MAX_ENTRIES,
     best_allocations,
     enumerate_allocations,
+    greedy_local_allocation,
     score_allocation,
     validate_entry_count,
 )
@@ -189,9 +190,9 @@ def test_best_allocations_sorted_best_first_and_allocations_sum_to_n_entries():
     )
     results = best_allocations(sim, ["BUF", "KC"], n_entries=3)
 
-    means = [mean for _, mean, _ in results]
+    means = [result.mean_payout for result in results]
     assert means == sorted(means, reverse=True)
-    assert all(sum(allocation.values()) == 3 for allocation, _, _ in results)
+    assert all(sum(result.allocation.values()) == 3 for result in results)
     assert len(results) == math.comb(3 + 2 - 1, 2 - 1)
 
 
@@ -199,3 +200,81 @@ def test_best_allocations_rejects_above_the_cap():
     sim = _blank_field_simulation([4], n_paths=1, n_rivals=1, pot=100.0)
     with pytest.raises(ValueError):
         best_allocations(sim, ["BUF", "KC"], n_entries=MAX_ENTRIES + 1)
+
+
+def _real_sim(n_paths=300, n_rivals=30, seed=7):
+    base_ratings = {team: 0.0 for team in ["BUF", "NYJ", "KC", "LV", "MIA", "DEN"]}
+    rng = np.random.default_rng(seed)
+    return simulate_rival_field(
+        TWO_WEEK_SCHEDULE, base_ratings, home_field_advantage=1.0, weekly_rating_std=1.0,
+        current_week=4, final_week=5, n_paths=n_paths, n_rivals=n_rivals, pot=1000.0, rng=rng,
+    )
+
+
+def test_best_allocations_gap_to_best_is_zero_for_the_top_result():
+    sim = _real_sim()
+    results = best_allocations(sim, ["BUF", "KC"], n_entries=3)
+    assert results[0].gap_to_best == pytest.approx(0.0)
+    assert results[0].gap_to_best_se == pytest.approx(0.0)
+
+
+def test_best_allocations_gap_to_best_matches_mean_difference_for_others():
+    sim = _real_sim()
+    results = best_allocations(sim, ["BUF", "KC"], n_entries=3)
+    for result in results[1:]:
+        assert result.gap_to_best == pytest.approx(results[0].mean_payout - result.mean_payout, abs=1e-6)
+        assert result.gap_to_best_se >= 0.0
+
+
+def test_best_allocations_accepts_precomputed_elimination_weeks():
+    sim = _real_sim()
+    precomputed = {team: team_elimination_week(sim, team) for team in ["BUF", "KC"]}
+    results = best_allocations(sim, ["BUF", "KC"], n_entries=3, elimination_weeks=precomputed)
+    fresh = best_allocations(sim, ["BUF", "KC"], n_entries=3)
+    assert [r.mean_payout for r in results] == [r.mean_payout for r in fresh]
+
+
+def test_best_allocations_precomputed_elimination_weeks_missing_team_raises():
+    sim = _real_sim()
+    with pytest.raises(ValueError):
+        best_allocations(sim, ["BUF", "KC"], n_entries=3, elimination_weeks={"BUF": team_elimination_week(sim, "BUF")})
+
+
+def test_greedy_local_allocation_matches_exhaustive_search_on_a_small_case():
+    # the real validation: on a candidate set small enough to enumerate
+    # exactly, the heuristic should land on (or statistically tie) the true
+    # best allocation, not just something plausible-looking.
+    sim = _real_sim(n_paths=2000, seed=11)
+    exhaustive = best_allocations(sim, ["BUF", "KC", "NYJ"], n_entries=5)
+    greedy_result = greedy_local_allocation(sim, ["BUF", "KC", "NYJ"], n_entries=5)
+
+    assert greedy_result.allocation == exhaustive[0].allocation
+
+
+def test_greedy_local_allocation_rejects_above_the_cap():
+    sim = _blank_field_simulation([4], n_paths=1, n_rivals=1, pot=100.0)
+    with pytest.raises(ValueError):
+        greedy_local_allocation(sim, ["BUF", "KC"], n_entries=MAX_ENTRIES + 1)
+
+
+def test_greedy_local_allocation_rejects_empty_candidate_list():
+    sim = _blank_field_simulation([4], n_paths=1, n_rivals=1, pot=100.0)
+    with pytest.raises(ValueError):
+        greedy_local_allocation(sim, [], n_entries=3)
+
+
+def test_greedy_local_allocation_accepts_precomputed_elimination_weeks():
+    sim = _real_sim()
+    precomputed = {team: team_elimination_week(sim, team) for team in ["BUF", "KC"]}
+    result = greedy_local_allocation(sim, ["BUF", "KC"], n_entries=3, elimination_weeks=precomputed)
+    assert sum(result.allocation.values()) == 3
+
+
+def test_greedy_local_allocation_scales_to_a_large_candidate_list():
+    # the actual point of this function: candidate lists too large for
+    # best_allocations to enumerate exhaustively (all 32 teams would be
+    # C(24+32-1, 31) allocations for 24 entries -- intractable).
+    sim = _real_sim(n_paths=50, n_rivals=20)
+    result = greedy_local_allocation(sim, list(TEAM_INDEX), n_entries=10)
+    assert sum(result.allocation.values()) == 10
+    assert set(result.allocation) <= set(TEAM_INDEX)

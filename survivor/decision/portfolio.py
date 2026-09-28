@@ -2,11 +2,30 @@
 
 Ten entries all on one team is one bet at ten times the stake, so entries
 must be optimized jointly rather than picking the best team for each entry
-independently -- see the plan's Portfolio layer note. This module enumerates
-every way to split n_entries across a short list of candidate teams (stars
-and bars: choosing counts that sum to n_entries is equivalent to placing
-len(candidate_teams) - 1 dividers among n_entries items) and leaves scoring
-each allocation's expected payout to the field simulator.
+independently -- see the plan's Portfolio layer note. Two search methods:
+
+- best_allocations: exhaustive. Enumerates every way to split n_entries
+  across a short list of candidate teams (stars and bars: choosing counts
+  that sum to n_entries is equivalent to placing len(candidate_teams) - 1
+  dividers among n_entries items). Exact, but the allocation count is
+  C(n_entries + k - 1, k - 1) for k candidate teams -- fine for the plan's
+  "top 5 or so" (1,001 for 10 entries), intractable for anything like all
+  ~32 teams playing a week (tens of millions).
+- greedy_local_allocation: heuristic. Builds one allocation greedily (each
+  entry goes wherever it adds the most expected payout given the entries
+  already placed) then refines it with pairwise local search (try moving
+  one entry between two teams, keep it if it helps, repeat to a local
+  optimum). Not guaranteed optimal, but its per-step cost doesn't explode
+  with the candidate list size, so it's the one to use for a large
+  candidate set. Validated against best_allocations on small cases where
+  exhaustive search is still checkable (test_portfolio.py).
+
+Both accept a precomputed `elimination_weeks` dict (from
+field_simulator.team_elimination_week, one array per candidate team) so a
+weekly batch job can compute it once for every team playing that week --
+this part IS cheap to do broadly, it's O(candidate teams) Hungarian-
+assignment solves, not combinatorial -- and every interactive re-plan
+during the week reuses it instead of recomputing.
 
 MAX_ENTRIES: this season's actual Splash Sports league caps a single
 participant at 25 entries, and that cap is enforced here as a hard input
@@ -19,6 +38,7 @@ for how a multi-league version should handle this instead of hardcoding it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
@@ -26,6 +46,25 @@ import numpy as np
 from survivor.simulation.field_simulator import FieldSimulation, team_elimination_week
 
 MAX_ENTRIES = 25  # this league's cap (Splash Sports, 2026 season) -- see module docstring
+
+
+@dataclass
+class AllocationResult:
+    allocation: dict[str, int]
+    mean_payout: float
+    standard_error: float
+    # gap_to_best / gap_to_best_se are 0.0 for the best allocation itself,
+    # and for any result not produced by a ranked comparison (e.g.
+    # greedy_local_allocation, which searches for one allocation rather
+    # than ranking several). Computed from the same per-path payouts as the
+    # best allocation (common random numbers), so this is a genuine paired
+    # comparison -- its standard error is usually much smaller than
+    # sqrt(this.standard_error**2 + best.standard_error**2) would suggest,
+    # since both allocations share the same simulated field. A caller can
+    # treat an allocation as statistically tied with the best one when
+    # gap_to_best is within a couple of gap_to_best_se of zero.
+    gap_to_best: float = 0.0
+    gap_to_best_se: float = 0.0
 
 
 def validate_entry_count(n_entries: int) -> None:
@@ -140,36 +179,127 @@ def score_allocation(
     )
 
 
+def _standard_error(payouts: np.ndarray, n_paths: int) -> float:
+    return float(payouts.std(ddof=1) / np.sqrt(n_paths)) if n_paths > 1 else 0.0
+
+
 def best_allocations(
     sim: FieldSimulation,
     candidate_teams: list[str],
     n_entries: int,
     used_teams_before: dict[str, set[str]] | None = None,
-) -> list[tuple[dict[str, int], float, float]]:
+    elimination_weeks: dict[str, np.ndarray] | None = None,
+) -> list[AllocationResult]:
     """Every allocation of n_entries across candidate_teams, ranked by mean expected payout.
 
-    Returns (allocation, mean_payout, standard_error) tuples, best first.
-    The standard error is of that allocation's payout alone, not of the gap
-    to the runner-up -- per the plan's simulation-variance note, common
-    random numbers (every allocation is scored against the same sim) make
-    the gap's standard error much smaller than either allocation's own, so
-    compare top candidates on the same run rather than reading these in
-    isolation.
+    Pass a precomputed elimination_weeks (e.g. computed once for every team
+    playing this week by a weekly batch job) to skip recomputing it here --
+    it must cover every team in candidate_teams. Otherwise it's computed
+    fresh for exactly candidate_teams.
+
+    gap_to_best / gap_to_best_se on each result are a paired comparison
+    against the best allocation, using the same simulated paths (common
+    random numbers) -- see AllocationResult's docstring for how to read it.
     """
     validate_entry_count(n_entries)
     used_teams_before = used_teams_before or {}
 
-    elimination_weeks = {
-        team: team_elimination_week(sim, team, used_teams_before.get(team))
-        for team in candidate_teams
-    }
+    if elimination_weeks is None:
+        elimination_weeks = {
+            team: team_elimination_week(sim, team, used_teams_before.get(team))
+            for team in candidate_teams
+        }
+    else:
+        missing = set(candidate_teams) - set(elimination_weeks)
+        if missing:
+            raise ValueError(f"elimination_weeks missing candidate teams: {sorted(missing)}")
+
+    scored = [
+        (allocation, score_allocation(sim, allocation, elimination_weeks))
+        for allocation in enumerate_allocations(n_entries, candidate_teams)
+    ]
+    scored.sort(key=lambda item: item[1].mean(), reverse=True)
+    best_payouts = scored[0][1]
 
     results = []
-    for allocation in enumerate_allocations(n_entries, candidate_teams):
-        payouts = score_allocation(sim, allocation, elimination_weeks)
-        mean = float(payouts.mean())
-        stderr = float(payouts.std(ddof=1) / np.sqrt(sim.n_paths)) if sim.n_paths > 1 else 0.0
-        results.append((allocation, mean, stderr))
-
-    results.sort(key=lambda result: result[1], reverse=True)
+    for i, (allocation, payouts) in enumerate(scored):
+        if i == 0:
+            gap_to_best, gap_to_best_se = 0.0, 0.0
+        else:
+            diff = best_payouts - payouts  # paired, not independent -- see AllocationResult
+            gap_to_best, gap_to_best_se = float(diff.mean()), _standard_error(diff, sim.n_paths)
+        results.append(
+            AllocationResult(
+                allocation=allocation,
+                mean_payout=float(payouts.mean()),
+                standard_error=_standard_error(payouts, sim.n_paths),
+                gap_to_best=gap_to_best,
+                gap_to_best_se=gap_to_best_se,
+            )
+        )
     return results
+
+
+def greedy_local_allocation(
+    sim: FieldSimulation,
+    candidate_teams: list[str],
+    n_entries: int,
+    used_teams_before: dict[str, set[str]] | None = None,
+    elimination_weeks: dict[str, np.ndarray] | None = None,
+) -> AllocationResult:
+    """Heuristic search for a single good allocation, for candidate lists too large to enumerate exhaustively.
+
+    Greedy construction (each entry goes wherever it adds the most expected
+    payout given entries already placed) followed by pairwise local search
+    (move one entry between two teams, keep it if it helps, repeat to a
+    local optimum). Not guaranteed globally optimal -- use best_allocations
+    instead when the candidate list is small enough to enumerate exactly
+    (see module docstring for the tradeoff).
+    """
+    validate_entry_count(n_entries)
+    if not candidate_teams:
+        raise ValueError("candidate_teams must be non-empty")
+    used_teams_before = used_teams_before or {}
+
+    if elimination_weeks is None:
+        elimination_weeks = {
+            team: team_elimination_week(sim, team, used_teams_before.get(team))
+            for team in candidate_teams
+        }
+    else:
+        missing = set(candidate_teams) - set(elimination_weeks)
+        if missing:
+            raise ValueError(f"elimination_weeks missing candidate teams: {sorted(missing)}")
+
+    def mean_payout(allocation: dict[str, int]) -> float:
+        return float(score_allocation(sim, allocation, elimination_weeks).mean())
+
+    allocation: dict[str, int] = {}
+    for _ in range(n_entries):
+        best_team = max(candidate_teams, key=lambda team: mean_payout({**allocation, team: allocation.get(team, 0) + 1}))
+        allocation[best_team] = allocation.get(best_team, 0) + 1
+
+    current_mean = mean_payout(allocation)
+    improved = True
+    while improved:
+        improved = False
+        for from_team in list(allocation):
+            for to_team in candidate_teams:
+                if to_team == from_team:
+                    continue
+                trial = dict(allocation)
+                trial[from_team] -= 1
+                if trial[from_team] == 0:
+                    del trial[from_team]
+                trial[to_team] = trial.get(to_team, 0) + 1
+                trial_mean = mean_payout(trial)
+                if trial_mean > current_mean:
+                    allocation, current_mean = trial, trial_mean
+                    improved = True
+
+    payouts = score_allocation(sim, allocation, elimination_weeks)
+    return AllocationResult(
+        allocation=allocation,
+        mean_payout=float(payouts.mean()),
+        standard_error=_standard_error(payouts, sim.n_paths),
+    )
