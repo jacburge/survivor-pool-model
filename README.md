@@ -80,15 +80,21 @@ to already be populated.
 Phases 0 through 6 are done — data ingestion, current- and future-week win
 probabilities, the pick popularity model, the Monte Carlo field simulator
 with rollout scoring, and joint portfolio allocation across entries, all
-wired up and tested (138 tests passing). A blind Week 1, 2026 backtest
+wired up and tested (147 tests passing). A blind Week 1, 2026 backtest
 (`scripts/backtest_week1.py`) ran the full pipeline end to end successfully.
 
 Two open items: Phase 3's lookahead cross-check (projected spreads within
 ~1.5 points of real lookahead lines) hadn't passed as of its first commit —
 worth rechecking as more lookahead weeks of real data build up. Phase 6's
-stability validation (same top allocation across 5 random seeds, survives a
-2 percentage point probability shift) hasn't been run yet — needs a
-`validate_portfolio.py` script and real data.
+5-random-seed stability check (`scripts/validate_portfolio.py`, run against
+real Week 4, 2026 data) came back a near-tie rather than a clean pass —
+entries shuffled between three of five candidate teams across seeds, with
+mean payouts within about ±3% of each other at 5,000 paths; worth
+re-checking at Phase 5's 80,000-path budget before calling it settled. The
+2-percentage-point probability-shift check passed cleanly. That same run
+also found that `greedy_local_allocation` searching all ~32 teams playing a
+week beats exhaustive search restricted to the top 5 by survival
+probability by a real, non-noise margin — see plan.md's Phase 6 section.
 
 Not yet built: Phase 7 (lock-day submission), most of Phase 8 (only the
 rival tracker's storage layer exists so far; popularity refinement from the

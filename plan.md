@@ -45,11 +45,37 @@ open validation gap. Status by phase:
   `score_allocation`, `best_allocations`), including a real correctness fix
   — `score_allocation` correctly splits the pot when several of your own
   entries share a winner set, which `field_simulator.score_candidate` alone
-  can't do, since it scores one entry as if it were your only one. Still
-  open: the exhaustive-search validation criteria (same top allocation
-  across 5 random seeds, survives a 2 percentage point probability shift)
-  haven't been run yet — needs a `validate_portfolio.py` script and real
-  data, both pending.
+  can't do, since it scores one entry as if it were your only one. Added a
+  `greedy_local_allocation` search (greedy construction plus pairwise local
+  search) alongside the exhaustive one, since `enumerate_allocations` is
+  combinatorial in candidate-team count and can't scale to all ~32 teams
+  playing a week; validated against exhaustive search on a small enumerable
+  case, where it finds the true optimum. `AllocationResult` now also
+  carries a paired gap-to-best and its standard error (common random
+  numbers, not an independent-SE combination), so a UI can tell genuine
+  ties from real differences.
+
+  Ran `scripts/validate_portfolio.py` against real Week 4, 2026 data
+  (5,000 paths, 500 rivals, top-5 candidates by survival probability). The
+  2-percentage-point probability-shift criterion passed cleanly. The
+  5-random-seed criterion did not pass strictly — the top allocation
+  shuffled entries between MIN/BUF/KC across seeds (BAL and SEA stayed
+  fixed at 2 each), with mean payouts spanning 333-357 — a near-tie at this
+  path count per the plan's own allowance, not a clear failure; worth
+  re-checking at a higher path count (Phase 5's 80,000-path budget) before
+  treating it as settled.
+
+  The same run surfaced a real finding, not just a performance one:
+  restricting to the top 5 candidates by survival probability and
+  enumerating exhaustively (14.4s, mean payout 349.77) left real value on
+  the table versus `greedy_local_allocation` searching all 32 teams playing
+  that week (1.7s, reusing a once-per-week precomputed elimination array
+  set that itself took 81s to build) — mean payout 397.28, a paired gap of
+  47.5 ± 9.96 SE, clearly not noise. Consistent with the project's central
+  thesis (expected payout isn't survival probability): a team outside the
+  survival-probability top 5 had better leverage. Worth using the
+  all-candidate greedy search as the default going forward, not just a
+  fallback for when exhaustive search is too slow.
 - **Phase 7 (Lock day):** not started — scheduled for October 1 (Thursday
   option only) and October 4.
 - **Phase 8 (In-season additions):** only the rival tracker's storage layer
