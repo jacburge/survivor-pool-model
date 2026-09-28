@@ -42,7 +42,32 @@ cp .env.example .env   # fill in THE_ODDS_API_KEY (thin free tier: 500 req/month
 .venv/bin/pytest
 ```
 
-## Pull real data
+## Weekly recommendation
+
+`run_weekly.py` is the actual production entry point: refreshes real data
+(schedule free/ESPN, current-week odds live via The Odds API -- on by
+default here, since a real weekly decision is exactly the case worth
+spending quota on) and recommends an allocation of your entries across
+every team playing that week, via the greedy all-candidate search (Phase
+6's validated default -- see plan.md). Saves the pick sheet to
+`data_store/pick_sheets/`.
+
+```bash
+.venv/bin/python scripts/run_weekly.py --week 4                         # real run, live odds pull
+.venv/bin/python scripts/run_weekly.py --week 4 --skip-refresh          # reuse data_store/ as-is
+.venv/bin/python scripts/run_weekly.py --week 4 --n-paths 5000          # quick/rough look
+.venv/bin/python scripts/run_weekly.py --week 4 --n-entries 10 --n-rivals 500
+```
+
+Default `--n-paths 20000` runs in a few minutes; raise it (e.g. 80000) for
+the final pre-lock decision, but see the script's own docstring for the
+runtime-vs-precision tradeoff -- precomputing elimination arrays for every
+team playing adds real time beyond Phase 5's own validated budget.
+
+Known simplification: assumes your entries have no picks locked in before
+`--week` (true today -- confirm before reusing this for a mid-season week).
+
+## Pull real data without a recommendation
 
 Schedule (ESPN) and pick percentages (SurvivorGrid) are free and keyless.
 Odds (The Odds API) is quota-limited and only pulled when asked. Everything
