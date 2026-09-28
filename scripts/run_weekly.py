@@ -44,11 +44,21 @@ team playing (needed for the all-candidate search) is the added cost
 beyond Phase 5's own validated field-simulation runtime, since it's one
 Hungarian-assignment solve per (used-teams history, team) pair -- same as
 per-team once entries share a history, as they do for a fresh --week 4.
-Rough budget at 500 rivals, ~32 teams playing, fresh entries: 20,000 paths
-~9 minutes, 80,000 paths ~35-40 minutes (over Phase 5's 30-minute bar) --
-use a lower --n-paths for a quick look and raise it for the final
-pre-lock run. Diverged histories cost more (up to one solve per distinct
-history per team, not one total).
+The recommendation search, its sanity check, and both payout rebuilds all
+share one cache (elimination_weeks passed into greedy_local_entry_
+allocation), so a pair already solved for the full candidate list isn't
+re-solved for the sanity check's subset or to rebuild either one's payout
+array -- confirmed this halves what would otherwise be redundant solves,
+with byte-for-byte identical results (verified at fixed --seed before and
+after). Measured on real Week 4, 2026 data at 500 rivals, ~32 teams,
+fresh entries: 2,000 paths ~67s, extrapolating to ~9 minutes at the
+20,000-path default and ~36-40 minutes at 80,000 (Phase 5's own budget,
+over its 30-minute bar -- use a lower --n-paths for a quick look and raise
+it for the final pre-lock run). Diverged histories cost more (up to one
+solve per distinct history per team, not one total) and a later --week
+needs one more free SurvivorGrid request per elapsed week for the rating
+fit, but both are small next to the simulation's own cost at any
+reasonable --n-paths.
 
 Rating fit uses this week's real spreads plus every earlier week's real
 closing spreads this season (survivor.data.survivorgrid_client.
@@ -78,7 +88,7 @@ from survivor.data.survivorgrid_client import fetch_season_to_date_games
 from survivor.decision.portfolio import greedy_local_entry_allocation, score_entries
 from survivor.probability.current_week import compute_current_week_probabilities, compute_current_week_spreads
 from survivor.probability.ratings import DEFAULT_SEASON_TO_DATE_RIDGE, fit_team_ratings
-from survivor.simulation.field_simulator import simulate_rival_field, team_elimination_week
+from survivor.simulation.field_simulator import simulate_rival_field
 
 FINAL_WEEK = 18
 TOP_N_FOR_SANITY_CHECK = 5
@@ -191,13 +201,22 @@ def main() -> None:
     all_teams_playing = sorted(set(week_games["home_team"]) | set(week_games["away_team"]))
     print(f"\nRecommending picks for {len(alive_ids)} alive entries across all "
           f"{len(all_teams_playing)} teams playing Week {args.week}...")
-    recommendation = greedy_local_entry_allocation(sim, used_teams_by_entry, all_teams_playing)
+    # shared across both searches below and the payout rebuilds that follow
+    # them, so a (used-teams, team) pair already solved for the full
+    # candidate list isn't re-solved for the top-N sanity check restricted
+    # to a subset of the same teams, and isn't solved a third/fourth time
+    # just to rebuild each result's own payout array for scoring.
+    elimination_cache: dict = {}
+
+    recommendation = greedy_local_entry_allocation(
+        sim, used_teams_by_entry, all_teams_playing, elimination_weeks=elimination_cache
+    )
 
     team_counts: dict[str, int] = {}
     for team in recommendation.values():
         team_counts[team] = team_counts.get(team, 0) + 1
     recommendation_arrays = {
-        entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        entry_id: elimination_cache[(frozenset(used_teams_by_entry[entry_id]), team)]
         for entry_id, team in recommendation.items()
     }
     recommendation_payout = score_entries(sim, recommendation_arrays)
@@ -210,9 +229,11 @@ def main() -> None:
 
     top_candidates = sorted(current_week_survival, key=current_week_survival.get, reverse=True)[:TOP_N_FOR_SANITY_CHECK]
     top_candidates = [t for t in top_candidates if t in all_teams_playing]
-    sanity_check = greedy_local_entry_allocation(sim, used_teams_by_entry, top_candidates)
+    sanity_check = greedy_local_entry_allocation(
+        sim, used_teams_by_entry, top_candidates, elimination_weeks=elimination_cache
+    )
     sanity_arrays = {
-        entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        entry_id: elimination_cache[(frozenset(used_teams_by_entry[entry_id]), team)]
         for entry_id, team in sanity_check.items()
     }
     sanity_payout = score_entries(sim, sanity_arrays)

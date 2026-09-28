@@ -362,6 +362,7 @@ def greedy_local_entry_allocation(
     sim: FieldSimulation,
     used_teams_by_entry: dict[str, set[str]],
     candidate_teams: list[str],
+    elimination_weeks: dict[tuple[frozenset, str], np.ndarray] | None = None,
 ) -> dict[str, str]:
     """Heuristic per-entry team assignment for entries with diverged histories.
 
@@ -371,6 +372,15 @@ def greedy_local_entry_allocation(
     survivor.data.my_entries.used_teams_by_entry(alive_entries) once your
     entries have picked different teams in prior weeks and some may
     already be eliminated.
+
+    elimination_weeks, if given, is used as the (used-teams signature, team)
+    cache instead of a fresh one, and is mutated in place with whatever
+    this call computes -- pass the same dict into multiple calls (e.g. a
+    full-candidate-list recommendation and a smaller sanity-check list
+    restricted to a subset of the same teams and entries) to skip
+    recomputing Hungarian-assignment solves already done for the first, and
+    inspect it afterward instead of recomputing per-entry arrays again for
+    scoring. Keys are (frozenset(that entry's used_teams), team).
 
     Same greedy-then-local-search pattern as greedy_local_allocation, on
     individual entries instead of team counts: greedy construction places
@@ -403,7 +413,7 @@ def greedy_local_entry_allocation(
     if stuck:
         raise ValueError(f"no eligible team left among candidate_teams for: {stuck}")
 
-    cache: dict[tuple[frozenset, str], np.ndarray] = {}
+    cache = elimination_weeks if elimination_weeks is not None else {}
 
     def elimination_array(entry_id: str, team: str) -> np.ndarray:
         key = (frozenset(used_teams_by_entry[entry_id]), team)

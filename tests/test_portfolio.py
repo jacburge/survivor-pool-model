@@ -409,3 +409,36 @@ def test_greedy_local_entry_allocation_returns_one_team_per_entry():
     assert set(result) == {"e1", "e2", "e3"}
     for entry_id, team in result.items():
         assert team not in used_teams_by_entry[entry_id]
+
+
+def test_greedy_local_entry_allocation_populates_a_shared_cache():
+    # passing an external cache dict should end up populated with every
+    # (used-teams, team) pair this call actually evaluated, so a caller can
+    # reuse it for a second, related call (e.g. a sanity check restricted
+    # to a subset of the same teams) instead of recomputing from scratch,
+    # and can look up any entry's array directly afterward instead of
+    # calling team_elimination_week again itself.
+    sim = _real_sim(n_paths=50, n_rivals=20)
+    used_teams_by_entry = {"e1": set(), "e2": set()}
+    shared_cache: dict = {}
+
+    result = greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC"], elimination_weeks=shared_cache)
+
+    assert len(shared_cache) > 0
+    for entry_id, team in result.items():
+        key = (frozenset(used_teams_by_entry[entry_id]), team)
+        assert key in shared_cache
+
+
+def test_greedy_local_entry_allocation_reuses_a_shared_cache_across_calls():
+    sim = _real_sim(n_paths=50, n_rivals=20)
+    used_teams_by_entry = {"e1": set(), "e2": set()}
+    shared_cache: dict = {}
+
+    greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC", "NYJ"], elimination_weeks=shared_cache)
+    size_after_first_call = len(shared_cache)
+
+    # a second call restricted to teams already covered by the first
+    # shouldn't add any new cache entries
+    greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC"], elimination_weeks=shared_cache)
+    assert len(shared_cache) == size_after_first_call
