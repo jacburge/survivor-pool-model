@@ -1,4 +1,5 @@
 import math
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -9,7 +10,9 @@ from survivor.decision.portfolio import (
     best_allocations,
     enumerate_allocations,
     greedy_local_allocation,
+    greedy_local_entry_allocation,
     score_allocation,
+    score_entries,
     validate_entry_count,
 )
 from survivor.simulation.field_simulator import (
@@ -278,3 +281,101 @@ def test_greedy_local_allocation_scales_to_a_large_candidate_list():
     result = greedy_local_allocation(sim, list(TEAM_INDEX), n_entries=10)
     assert sum(result.allocation.values()) == 10
     assert set(result.allocation) <= set(TEAM_INDEX)
+
+
+# --- score_entries / greedy_local_entry_allocation: entries with diverged histories ---
+
+
+def test_score_entries_matches_score_allocation_for_interchangeable_entries():
+    sim = _real_sim()
+    elimination_weeks = {"BUF": team_elimination_week(sim, "BUF"), "KC": team_elimination_week(sim, "KC")}
+    allocation = {"BUF": 2, "KC": 1}
+    by_team = score_allocation(sim, allocation, elimination_weeks)
+
+    by_entry = score_entries(
+        sim,
+        {
+            "e1": elimination_weeks["BUF"],
+            "e2": elimination_weeks["BUF"],
+            "e3": elimination_weeks["KC"],
+        },
+    )
+    np.testing.assert_allclose(by_entry, by_team)
+
+
+def test_score_entries_rejects_empty_input():
+    sim = _blank_field_simulation([4], n_paths=1, n_rivals=1, pot=100.0)
+    with pytest.raises(ValueError):
+        score_entries(sim, {})
+
+
+def test_greedy_local_entry_allocation_matches_exhaustive_search_with_per_entry_exclusions():
+    # three entries with different prior histories, all still eligible for
+    # every current-week candidate team, but each entry's own FUTURE
+    # opportunity cost differs by what it already excluded (MIA vs. DEN vs.
+    # nothing) -- the real subtlety this function exists for: same team
+    # this week, different value per entry. Brute force every one of the
+    # 4**3 = 64 valid assignments directly (not via best_allocations, which
+    # can't express per-entry exclusions at all) and confirm the heuristic
+    # finds the true best.
+    sim = _real_sim(n_paths=1000, seed=13)
+    used_teams_by_entry = {"e1": {"MIA"}, "e2": {"DEN"}, "e3": set()}
+    candidate_teams = ["BUF", "NYJ", "KC", "LV"]
+
+    best_mean, best_assignment = -1.0, None
+    for teams in product(candidate_teams, repeat=3):
+        assignment = dict(zip(used_teams_by_entry, teams))
+        arrays = {
+            entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+            for entry_id, team in assignment.items()
+        }
+        mean = float(score_entries(sim, arrays).mean())
+        if mean > best_mean:
+            best_mean, best_assignment = mean, assignment
+
+    result = greedy_local_entry_allocation(sim, used_teams_by_entry, candidate_teams)
+    result_arrays = {
+        entry_id: team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        for entry_id, team in result.items()
+    }
+    result_mean = float(score_entries(sim, result_arrays).mean())
+
+    assert result_mean == pytest.approx(best_mean, rel=1e-9)
+
+
+def test_greedy_local_entry_allocation_respects_each_entrys_own_exclusions():
+    sim = _real_sim()
+    used_teams_by_entry = {"e1": {"BUF"}, "e2": set()}
+    result = greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC"])
+    assert result["e1"] != "BUF"  # e1 already used BUF, must not be re-recommended it
+
+
+def test_greedy_local_entry_allocation_raises_when_an_entry_has_no_eligible_team():
+    sim = _real_sim()
+    used_teams_by_entry = {"e1": {"BUF", "KC"}}
+    with pytest.raises(ValueError):
+        greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC"])
+
+
+def test_greedy_local_entry_allocation_rejects_empty_inputs():
+    sim = _real_sim()
+    with pytest.raises(ValueError):
+        greedy_local_entry_allocation(sim, {}, ["BUF"])
+    with pytest.raises(ValueError):
+        greedy_local_entry_allocation(sim, {"e1": set()}, [])
+
+
+def test_greedy_local_entry_allocation_rejects_above_the_cap():
+    sim = _blank_field_simulation([4], n_paths=1, n_rivals=1, pot=100.0)
+    used_teams_by_entry = {f"e{i}": set() for i in range(MAX_ENTRIES + 1)}
+    with pytest.raises(ValueError):
+        greedy_local_entry_allocation(sim, used_teams_by_entry, ["BUF", "KC"])
+
+
+def test_greedy_local_entry_allocation_returns_one_team_per_entry():
+    sim = _real_sim(n_paths=50, n_rivals=20)
+    used_teams_by_entry = {"e1": set(), "e2": {"BUF"}, "e3": {"KC", "BUF"}}
+    result = greedy_local_entry_allocation(sim, used_teams_by_entry, list(TEAM_INDEX))
+    assert set(result) == {"e1", "e2", "e3"}
+    for entry_id, team in result.items():
+        assert team not in used_teams_by_entry[entry_id]

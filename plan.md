@@ -76,6 +76,23 @@ open validation gap. Status by phase:
   survival-probability top 5 had better leverage. Worth using the
   all-candidate greedy search as the default going forward, not just a
   fallback for when exhaustive search is too slow.
+
+  Extended for entries with diverged histories (needed from Week 5 onward,
+  once entries have picked different teams and some may be eliminated --
+  see `survivor/data/my_entries.py`): `score_entries` is a new core
+  primitive working from each entry's own elimination-week array rather
+  than team counts, since even two entries on the *same* team this week
+  aren't interchangeable once their own prior picks differ (each one's
+  future max-survival assignment excludes different already-used teams).
+  `score_allocation` is now a thin wrapper over it (refactor only, all
+  existing tests pass unchanged). `greedy_local_entry_allocation` is the
+  per-entry search, results cached by (used-teams signature, team) so
+  entries who haven't diverged yet don't duplicate Hungarian-assignment
+  solves. Caught a real bug while validating it against exhaustive
+  enumeration on a small case: single-entry local-search moves alone got
+  stuck in a local optimum (96.86 vs. the true 97.55) whenever reaching the
+  best assignment required two entries trading teams simultaneously —
+  fixed by adding a pairwise-swap move alongside the single-entry one.
 - **Phase 7 (Lock day):** the "weekly pick sheet" piece exists
   (`scripts/run_weekly.py`: refresh real data, fit current ratings, run the
   simulator, recommend an entry allocation, archive it to

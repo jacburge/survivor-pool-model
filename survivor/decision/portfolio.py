@@ -2,7 +2,9 @@
 
 Ten entries all on one team is one bet at ten times the stake, so entries
 must be optimized jointly rather than picking the best team for each entry
-independently -- see the plan's Portfolio layer note. Two search methods:
+independently -- see the plan's Portfolio layer note. Three search methods,
+the first two for entries that are still interchangeable (a fresh season
+start -- no prior picks distinguishing one entry from another):
 
 - best_allocations: exhaustive. Enumerates every way to split n_entries
   across a short list of candidate teams (stars and bars: choosing counts
@@ -26,6 +28,27 @@ weekly batch job can compute it once for every team playing that week --
 this part IS cheap to do broadly, it's O(candidate teams) Hungarian-
 assignment solves, not combinatorial -- and every interactive re-plan
 during the week reuses it instead of recomputing.
+
+Once entries have diverged (Week 5 onward: different prior picks, some
+possibly already eliminated -- see survivor.data.my_entries), they stop
+being interchangeable, for a subtle reason: even two entries put on the
+*same* team this week aren't equivalent anymore, because each one's own
+future max-survival assignment excludes whatever it used in *prior* weeks,
+which can differ per entry. team_elimination_week already supports this
+(it takes a used_teams_before per call), it just needs calling once per
+(entry, team) pair instead of once per team.
+
+- score_entries / greedy_local_entry_allocation: the entry-aware
+  equivalents. score_entries is the shared core both score_allocation and
+  the entry-aware search build on -- it works from each entry's own
+  elimination-week array and doesn't care about team identity, only
+  whether entries happen to share an array. greedy_local_entry_allocation
+  is the same greedy-then-local-search pattern, but each entry can only be
+  assigned a team outside its own used-teams history, and results are
+  cached by (used-teams signature, team) so entries who haven't diverged
+  yet don't pay for duplicate Hungarian-assignment solves. Validated
+  against exhaustive enumeration on a small case with per-entry exclusions
+  (test_portfolio.py).
 
 MAX_ENTRIES: this season's actual Splash Sports league caps a single
 participant at 25 entries, and that cap is enforced here as a hard input
@@ -103,20 +126,19 @@ def enumerate_allocations(n_entries: int, candidate_teams: list[str]) -> list[di
     return allocations
 
 
-def score_allocation(
-    sim: FieldSimulation,
-    allocation: dict[str, int],
-    elimination_weeks: dict[str, np.ndarray],
-) -> np.ndarray:
-    """Expected payout per path for a joint allocation of entries across teams.
+def score_entries(sim: FieldSimulation, elimination_weeks_by_entry: dict[str, np.ndarray]) -> np.ndarray:
+    """Expected total portfolio payout per path for a set of individual entries.
 
-    elimination_weeks must have one array (shape (sim.n_paths,), -1 where
-    that team's entry survives the whole horizon) per team in `allocation`
-    -- as returned by survivor.simulation.field_simulator.team_elimination_week.
-    Compute each candidate team's array once and reuse it across every
-    allocation that uses that team; it doesn't depend on how many entries
-    you put there, only on the team and (for now) an empty used-teams
-    history, so the same array is valid for every allocation this call.
+    elimination_weeks_by_entry: {entry_id: array}, one array (shape
+    (sim.n_paths,), -1 where that entry survives the whole horizon) per
+    entry -- as returned by field_simulator.team_elimination_week, called
+    once per entry with *that entry's own* used_teams_before. This is the
+    core primitive score_allocation and the entry-aware allocation search
+    both build on: score_allocation (entries assumed interchangeable,
+    grouped by team) expands a {team: count} allocation into `count`
+    synthetic same-team entries and calls this; the entry-aware search
+    (survivor.decision.portfolio's per-entry functions, for entries with
+    diverged histories) calls this directly, one real entry per key.
 
     This is the fix field_simulator.score_candidate can't express: that
     function scores one entry as if it were your only one, splitting only
@@ -132,19 +154,18 @@ def score_allocation(
     the field non-empty, so it isn't part of any split and should score
     zero, not a rival-cohort share it was never entitled to.
     """
-    missing = set(allocation) - set(elimination_weeks)
-    if missing:
-        raise ValueError(f"elimination_weeks missing entries for: {sorted(missing)}")
+    if not elimination_weeks_by_entry:
+        raise ValueError("elimination_weeks_by_entry must be non-empty")
 
     n_weeks = len(sim.weeks)
     n_paths = sim.n_paths
+    n_my_entries = len(elimination_weeks_by_entry)
 
     # how many of your entries are still alive after each week, per path
     your_alive_after = np.zeros((n_weeks, n_paths), dtype=int)
-    for team, count in allocation.items():
-        elim = elimination_weeks[team]  # -1 = never eliminated within the horizon
+    for elim in elimination_weeks_by_entry.values():  # -1 = never eliminated within the horizon
         for w_idx, week in enumerate(sim.weeks):
-            your_alive_after[w_idx] += count * ((elim == -1) | (elim > week))
+            your_alive_after[w_idx] += (elim == -1) | (elim > week)
 
     # rivals + yours, jointly -- this is the field the plan's payout rule
     # actually means, not rivals alone
@@ -154,17 +175,16 @@ def score_allocation(
     has_emptied = is_zero.any(axis=0)
     first_zero_idx = is_zero.argmax(axis=0)  # 0 where has_emptied is False; unused there
 
-    initial_total = sim.n_rivals + sum(allocation.values())
+    initial_total = sim.n_rivals + n_my_entries
     before = np.vstack([np.full(n_paths, initial_total), total_alive_after[:-1]])
     cohort_size = before[first_zero_idx, np.arange(n_paths)]
     true_emptied_week = np.where(has_emptied, np.array(sim.weeks)[first_zero_idx], -1)
 
     my_full_survivors = np.zeros(n_paths, dtype=int)
     my_cohort = np.zeros(n_paths, dtype=int)
-    for team, count in allocation.items():
-        elim = elimination_weeks[team]
-        my_full_survivors += count * (elim == -1)
-        my_cohort += count * (elim == true_emptied_week)
+    for elim in elimination_weeks_by_entry.values():
+        my_full_survivors += elim == -1
+        my_cohort += elim == true_emptied_week
 
     # guard both denominators against 0/0 on paths where the branch that
     # uses them isn't the one np.where ends up selecting (np.where still
@@ -177,6 +197,37 @@ def score_allocation(
         sim.pot * my_full_survivors / survivor_denom,
         np.where(my_cohort > 0, sim.pot * my_cohort / cohort_denom, 0.0),
     )
+
+
+def score_allocation(
+    sim: FieldSimulation,
+    allocation: dict[str, int],
+    elimination_weeks: dict[str, np.ndarray],
+) -> np.ndarray:
+    """Expected payout per path for a joint allocation of interchangeable entries across teams.
+
+    elimination_weeks must have one array (shape (sim.n_paths,), -1 where
+    that team's entry survives the whole horizon) per team in `allocation`
+    -- as returned by field_simulator.team_elimination_week. Compute each
+    candidate team's array once and reuse it across every allocation that
+    uses that team; it doesn't depend on how many entries you put there,
+    only on the team and (for now) an empty used-teams history, so the same
+    array is valid for every allocation this call.
+
+    A thin wrapper over score_entries: expands {team: count} into `count`
+    synthetic same-team entries. Only valid when entries really are
+    interchangeable (no prior used-teams history distinguishing them --
+    true for a fresh season start). Once entries have diverged, use
+    greedy_local_entry_allocation and score_entries directly instead.
+    """
+    missing = set(allocation) - set(elimination_weeks)
+    if missing:
+        raise ValueError(f"elimination_weeks missing entries for: {sorted(missing)}")
+
+    elimination_weeks_by_entry = {
+        f"{team}#{i}": elimination_weeks[team] for team, count in allocation.items() for i in range(count)
+    }
+    return score_entries(sim, elimination_weeks_by_entry)
 
 
 def _standard_error(payouts: np.ndarray, n_paths: int) -> float:
@@ -303,3 +354,103 @@ def greedy_local_allocation(
         mean_payout=float(payouts.mean()),
         standard_error=_standard_error(payouts, sim.n_paths),
     )
+
+
+def greedy_local_entry_allocation(
+    sim: FieldSimulation,
+    used_teams_by_entry: dict[str, set[str]],
+    candidate_teams: list[str],
+) -> dict[str, str]:
+    """Heuristic per-entry team assignment for entries with diverged histories.
+
+    Unlike greedy_local_allocation (which assumes entries are
+    interchangeable), each entry here has its own used_teams_before history
+    excluding it from some candidate_teams -- pass
+    survivor.data.my_entries.used_teams_by_entry(alive_entries) once your
+    entries have picked different teams in prior weeks and some may
+    already be eliminated.
+
+    Same greedy-then-local-search pattern as greedy_local_allocation, on
+    individual entries instead of team counts: greedy construction places
+    the most-constrained entries (fewest eligible teams) first, each going
+    wherever its own eligible choices add the most expected payout given
+    entries already placed; local search then tries moving each entry to a
+    different one of its own eligible teams, keeping the move if it
+    improves the total. team_elimination_week results are cached by
+    (used-teams signature, team), so entries who happen to share an
+    identical history so far -- common right after they first diverge --
+    don't pay for duplicate Hungarian-assignment solves.
+
+    Raises if any entry has no eligible team left among candidate_teams, or
+    if more entries are passed than this league's MAX_ENTRIES allows. Not
+    guaranteed globally optimal; validated against exhaustive enumeration
+    on a small case with per-entry exclusions (test_portfolio.py). Returns
+    entry_id -> recommended team.
+    """
+    validate_entry_count(len(used_teams_by_entry))
+    if not used_teams_by_entry:
+        raise ValueError("used_teams_by_entry must be non-empty")
+    if not candidate_teams:
+        raise ValueError("candidate_teams must be non-empty")
+
+    eligible = {
+        entry_id: [team for team in candidate_teams if team not in used]
+        for entry_id, used in used_teams_by_entry.items()
+    }
+    stuck = sorted(entry_id for entry_id, teams in eligible.items() if not teams)
+    if stuck:
+        raise ValueError(f"no eligible team left among candidate_teams for: {stuck}")
+
+    cache: dict[tuple[frozenset, str], np.ndarray] = {}
+
+    def elimination_array(entry_id: str, team: str) -> np.ndarray:
+        key = (frozenset(used_teams_by_entry[entry_id]), team)
+        if key not in cache:
+            cache[key] = team_elimination_week(sim, team, used_teams_by_entry[entry_id])
+        return cache[key]
+
+    def mean_payout(assignment: dict[str, str]) -> float:
+        arrays = {entry_id: elimination_array(entry_id, team) for entry_id, team in assignment.items()}
+        return float(score_entries(sim, arrays).mean())
+
+    # most-constrained entries (fewest eligible teams) first, a standard
+    # heuristic to avoid boxing in a tightly-constrained entry by filling
+    # the flexible ones first
+    order = sorted(eligible, key=lambda entry_id: len(eligible[entry_id]))
+    assignment: dict[str, str] = {}
+    for entry_id in order:
+        best_team = max(eligible[entry_id], key=lambda team: mean_payout({**assignment, entry_id: team}))
+        assignment[entry_id] = best_team
+
+    entry_ids = list(used_teams_by_entry)
+    current_mean = mean_payout(assignment)
+    improved = True
+    while improved:
+        improved = False
+        # single-entry moves
+        for entry_id in entry_ids:
+            for team in eligible[entry_id]:
+                if team == assignment[entry_id]:
+                    continue
+                trial = dict(assignment)
+                trial[entry_id] = team
+                trial_mean = mean_payout(trial)
+                if trial_mean > current_mean:
+                    assignment, current_mean = trial, trial_mean
+                    improved = True
+        # pairwise swaps: a move that only helps when two entries change
+        # together (e.g. each is better off with the other's current team)
+        # can look like no improvement to either single-entry move alone
+        for i, a in enumerate(entry_ids):
+            for b in entry_ids[i + 1 :]:
+                team_a, team_b = assignment[a], assignment[b]
+                if team_a == team_b or team_b not in eligible[a] or team_a not in eligible[b]:
+                    continue
+                trial = dict(assignment)
+                trial[a], trial[b] = team_b, team_a
+                trial_mean = mean_payout(trial)
+                if trial_mean > current_mean:
+                    assignment, current_mean = trial, trial_mean
+                    improved = True
+
+    return assignment
