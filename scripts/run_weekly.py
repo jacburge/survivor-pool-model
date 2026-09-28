@@ -1,14 +1,21 @@
 """Weekly production run (Phase 7): refresh real data, recommend an allocation
 of your entries across this week's candidate teams, and archive the result.
 
-Pulls a fresh schedule (this week through Week 18, free/ESPN) and live
-current-week odds (The Odds API, uses quota). The odds pull is ON by
-default here, unlike refresh_all.py's dev-focused default -- this script's
-entire purpose is a real weekly decision, exactly the case the odds-API
-conservation guidance carves out as worth spending quota on. Pass
---skip-refresh to reuse whatever is already in data_store/ instead (e.g.
-if you already refreshed today and just want to re-run with different
---n-entries or --n-paths).
+Pulls a fresh schedule (this week through Week 18, free/ESPN, always --
+there's no quota reason to ever skip it) and live current-week odds (The
+Odds API, uses quota). The odds pull is ON by default here, unlike
+refresh_all.py's dev-focused default -- this script's entire purpose is a
+real weekly decision, exactly the case the odds-API conservation guidance
+carves out as worth spending quota on. Pass --skip-odds-refresh to reuse
+data_store/odds/latest.csv instead (e.g. if you already refreshed today,
+or --week is a past week the live API no longer covers -- see below).
+
+Backtesting a past week: the Odds API only returns current/upcoming games,
+so --week for an already-played week needs --skip-odds-refresh plus
+data_store/odds/latest.csv actually containing that week's *pre-game*
+odds (i.e. pulled before it was played -- check the file's own pull
+timestamp against the week's kickoff before trusting this, or you'd be
+silently feeding the model a stale snapshot from some other week instead).
 
 Fits current-week ratings from real spreads (Phase 3), gets real
 current-week survival probabilities via Shin devig (Phase 2), runs the
@@ -77,10 +84,8 @@ def refresh_odds() -> pd.DataFrame:
     return odds
 
 
-def load_cached() -> tuple[pd.DataFrame, pd.DataFrame]:
-    schedule = pd.read_csv(DEFAULT_STORE_ROOT / "schedule" / "latest.csv")
-    odds = pd.read_csv(DEFAULT_STORE_ROOT / "odds" / "latest.csv")
-    return schedule, odds
+def load_cached_odds() -> pd.DataFrame:
+    return pd.read_csv(DEFAULT_STORE_ROOT / "odds" / "latest.csv")
 
 
 def main() -> None:
@@ -92,15 +97,18 @@ def main() -> None:
     parser.add_argument("--n-paths", type=int, default=20000, help="see docstring for the runtime-vs-precision tradeoff")
     parser.add_argument("--pot", type=float, default=9000.0)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--skip-refresh", action="store_true", help="reuse data_store/ as-is (saves an odds API call)")
+    parser.add_argument("--skip-odds-refresh", action="store_true",
+                         help="reuse data_store/odds/latest.csv instead of a live API call "
+                              "(required for a past --week; see docstring)")
     args = parser.parse_args()
 
-    if args.skip_refresh:
-        print("Skipping refresh, using cached data_store/ as-is.")
-        schedule, odds = load_cached()
+    print(f"Refreshing schedule (weeks {args.week}-{FINAL_WEEK}, {args.year})...")
+    schedule = refresh_schedule(args.year, args.week)
+
+    if args.skip_odds_refresh:
+        print("Skipping odds refresh, using cached data_store/odds/latest.csv as-is.")
+        odds = load_cached_odds()
     else:
-        print(f"Refreshing schedule (weeks {args.week}-{FINAL_WEEK}, {args.year})...")
-        schedule = refresh_schedule(args.year, args.week)
         print("Refreshing current-week odds (live API call)...")
         odds = refresh_odds()
 

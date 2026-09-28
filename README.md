@@ -54,7 +54,7 @@ every team playing that week, via the greedy all-candidate search (Phase
 
 ```bash
 .venv/bin/python scripts/run_weekly.py --week 4                         # real run, live odds pull
-.venv/bin/python scripts/run_weekly.py --week 4 --skip-refresh          # reuse data_store/ as-is
+.venv/bin/python scripts/run_weekly.py --week 4 --skip-odds-refresh     # reuse cached odds (or backtest a past week)
 .venv/bin/python scripts/run_weekly.py --week 4 --n-paths 5000          # quick/rough look
 .venv/bin/python scripts/run_weekly.py --week 4 --n-entries 10 --n-rivals 500
 ```
