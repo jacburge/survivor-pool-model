@@ -134,7 +134,7 @@ sheet, and optionally records it. A blind Week 1, 2026 backtest
 (`scripts/backtest_week1.py`) ran the full pipeline end to end
 successfully.
 
-Two open validation items: Phase 3's lookahead cross-check (projected
+One open validation item: Phase 3's lookahead cross-check (projected
 spreads within ~1.5 points of real lookahead lines) hadn't passed as of its
 first commit. Revisited: fitting ratings on every real week so far this
 season combined, instead of just the current week, plus a small ridge
@@ -143,17 +143,25 @@ MAE from 2.39 down to 1.73 — a real, validated improvement, but still short
 of the 1.5-point bar. See plan.md's Phase 3 section for the full diagnosis
 (it's almost entirely single-week-fit noise, not real team-strength
 change) and what didn't help (recency weighting). Worth rechecking again as
-more real weeks accumulate. Phase 6's 5-random-seed stability check
-(`scripts/validate_portfolio.py`,
-run against real Week 4, 2026 data) came back a near-tie rather than a
-clean pass — entries shuffled between three of five candidate teams across
-seeds, with mean payouts within about ±3% of each other at 5,000 paths;
-worth re-checking at Phase 5's 80,000-path budget before calling it
-settled. The 2-percentage-point probability-shift check passed cleanly.
-That same run also found that the all-candidate greedy search beats
-exhaustive search restricted to the top 5 by survival probability by a
-real, non-noise margin — see plan.md's Phase 6 section, which also has a
-real bug found and fixed in that search's local-search step along the way.
+more real weeks accumulate.
+
+Phase 6's 5-random-seed stability check is resolved. It initially came back
+a near-tie rather than a clean pass against real Week 4, 2026 data (entries
+shuffled between candidate teams across seeds); escalating precision 4x
+didn't change that, which pointed toward "these allocations are genuinely
+close" rather than "needs more precision." Confirmed that directly and
+cheaply using `AllocationResult`'s paired `gap_to_best`/`gap_to_best_se`
+(common random numbers keep its standard error far below either
+allocation's own) on a single already-computed simulation: all 10 of the
+top 10 allocations were within 2 SE of the best one. A genuine near-tie,
+exactly what the plan's own "or the result is flagged as a near tie"
+clause allows — `validate_portfolio.py` now runs this check automatically
+whenever seeds disagree. The 2-percentage-point probability-shift check
+passed cleanly. That same investigation also found that the all-candidate
+greedy search beats exhaustive search restricted to the top 5 by survival
+probability by a real, non-noise margin — see plan.md's Phase 6 section,
+which also has a real bug found and fixed in that search's local-search
+step along the way.
 
 Not yet built: Phase 7's actual lock-day behaviors (Thursday-vs-wait
 staging, 1pm Eastern cutoff awareness, submission automation, and

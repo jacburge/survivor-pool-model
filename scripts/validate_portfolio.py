@@ -68,6 +68,7 @@ def main() -> None:
 
     # --- Criterion 1: same top allocation across 5 random seeds ---
     top_allocations = []
+    first_seed_results = None
     for seed in range(5):
         rng = np.random.default_rng(seed)
         sim = simulate_rival_field(
@@ -76,11 +77,37 @@ def main() -> None:
             current_week_survival_probability=week4_survival, rng=rng,
         )
         results = best_allocations(sim, candidates, n_entries=N_ENTRIES)
+        if seed == 0:
+            first_seed_results = results
         top_allocations.append(results[0].allocation)
         print(f"  seed {seed}: top allocation {results[0].allocation}, mean payout {results[0].mean_payout:.2f}")
 
     seeds_stable = top_allocation_identical(top_allocations)
     print(f"\nSame top allocation across 5 seeds: {seeds_stable}")
+
+    if not seeds_stable:
+        # Cross-seed instability alone can't tell you *why* -- it conflates
+        # "these allocations are genuinely close" with "Monte Carlo noise
+        # moved the apparent winner around." best_allocations already
+        # computed a much more direct answer for free: gap_to_best is a
+        # *paired* comparison (common random numbers), so its standard
+        # error is usually far smaller than either allocation's own raw SE
+        # -- exactly what's needed to tell a real near-tie from a precision
+        # problem, without spending any more simulation budget.
+        print("\nNot stable across seeds -- checking whether the top allocations are a genuine near-tie "
+              "(paired gap_to_best from seed 0, reusing what best_allocations already computed):")
+        tied_count = 0
+        for r in first_seed_results[:10]:
+            tied = r.gap_to_best <= 2 * r.gap_to_best_se
+            tied_count += tied
+            print(f"    {r.allocation}  mean={r.mean_payout:7.2f}  gap_to_best={r.gap_to_best:5.2f} "
+                  f"+/- {r.gap_to_best_se:.2f}  ({'tied' if tied else 'distinguishable'})")
+        if tied_count >= 5:
+            print(f"\n{tied_count} of the top 10 allocations are statistically tied with the best one "
+                  "(paired gap within 2 SE) -- this is a genuine near-tie, not insufficient precision. "
+                  "More simulation paths would narrow the confidence interval around a near-zero true "
+                  "gap, not produce a different winner.")
+            seeds_stable = "near_tie"
 
     # --- Criterion 2: survives a 2pp shift in the leading team's probability ---
     shifted_probs = dict(week4_survival)
@@ -105,11 +132,17 @@ def main() -> None:
     probability_shift_stable = baseline_top == shifted_top
     print(f"Survives the probability shift: {probability_shift_stable}")
 
-    if seeds_stable and probability_shift_stable:
-        print("\nPhase 6 acceptance criterion met.")
+    if not probability_shift_stable:
+        print("\nDoes not meet Phase 6's acceptance criterion: fails the probability-shift check.")
+    elif seeds_stable is True:
+        print("\nPhase 6 acceptance criterion met: clean pass.")
+    elif seeds_stable == "near_tie":
+        print("\nPhase 6 acceptance criterion met: confirmed near-tie, which the plan's own "
+              "'or the result is flagged as a near tie' clause explicitly allows.")
     else:
-        print("\nNot stable by the strict criterion -- check whether it's a near tie "
-              "(gap_to_best vs. gap_to_best_se on the affected results) before treating this as a failure.")
+        print("\nNot stable across seeds, and the top allocations were NOT confirmed as a near-tie "
+              "(paired gap_to_best check above) -- this is a genuine, unresolved instability, not just "
+              "Monte Carlo noise. Worth investigating further before trusting the recommendation.")
 
     # --- Precompute-vs-recompute timing, answering the "precompute all teams" question ---
     print("\n--- Precompute timing ---")

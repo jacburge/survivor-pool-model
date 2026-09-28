@@ -82,12 +82,23 @@ open validation gap. Status by phase:
   Ran `scripts/validate_portfolio.py` against real Week 4, 2026 data
   (5,000 paths, 500 rivals, top-5 candidates by survival probability). The
   2-percentage-point probability-shift criterion passed cleanly. The
-  5-random-seed criterion did not pass strictly — the top allocation
-  shuffled entries between MIN/BUF/KC across seeds (BAL and SEA stayed
-  fixed at 2 each), with mean payouts spanning 333-357 — a near-tie at this
-  path count per the plan's own allowance, not a clear failure; worth
-  re-checking at a higher path count (Phase 5's 80,000-path budget) before
-  treating it as settled.
+  5-random-seed criterion didn't pass strictly — the top allocation
+  shuffled entries between MIN/BUF/KC across seeds, mean payouts spanning
+  333-357. Resolved, not just left as an open item: tried escalating
+  precision first (20,000 paths, 4x the original) and the instability
+  didn't budge, which pointed away from "just needs more precision" and
+  toward "these allocations are genuinely close." Confirmed that directly
+  and far more cheaply using `AllocationResult`'s own `gap_to_best`/
+  `gap_to_best_se` (a paired comparison via common random numbers, so its
+  standard error is much smaller than either allocation's own raw SE) on
+  a single simulation already computed by `best_allocations`, no extra
+  runs needed: all 10 of the top 10 allocations were within 2 SE of the
+  best one (gaps of 0-1.75, paired SE 0-2.37, against a raw per-allocation
+  SE of ~20) — a genuine near-tie, not insufficient precision. This is
+  exactly the plan's own "or the result is flagged as a near tie" clause,
+  now properly confirmed rather than just suspected.
+  `validate_portfolio.py` now runs this diagnostic automatically whenever
+  the 5-seed check fails, instead of leaving it as a manual follow-up.
 
   The same run surfaced a real finding, not just a performance one:
   restricting to the top 5 candidates by survival probability and
