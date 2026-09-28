@@ -54,8 +54,11 @@ playing that week, via `greedy_local_entry_allocation` (Phase 6). Entries
 are named `entry_1..entry_N` and their history is read from
 `survivor.data.my_entries` (`data_store/my_entries/`) -- nothing recorded
 yet (true before Week 4) just means every entry is alive with an empty
-used-teams set, handled like any other state, not a special case. Saves
-the pick sheet to `data_store/pick_sheets/`.
+used-teams set, handled like any other state, not a special case. Ratings
+are fit on every real week so far this season combined (one free
+SurvivorGrid pull per past week, plus this week's real odds), not the
+current week alone -- see Status below for why. Saves the pick sheet to
+`data_store/pick_sheets/`.
 
 ```bash
 .venv/bin/python scripts/run_weekly.py --week 4                         # real run, live odds pull
@@ -123,17 +126,25 @@ Phases 0 through 6 are done — data ingestion, current- and future-week win
 probabilities, the pick popularity model, the Monte Carlo field simulator
 with rollout scoring, and joint portfolio allocation across entries
 (including entries with diverged histories, from Week 5 onward), all wired
-up and tested (170 tests passing). Phase 7's pipeline piece is also done:
-`scripts/run_weekly.py` refreshes real data, fits ratings, runs the
-simulator, recommends a per-entry allocation, archives the pick sheet, and
-optionally records it. A blind Week 1, 2026 backtest
+up and tested (176 tests passing). Phase 7's pipeline piece is also done:
+`scripts/run_weekly.py` refreshes real data, fits ratings on every real week
+so far this season combined (not just the current week -- see below),
+runs the simulator, recommends a per-entry allocation, archives the pick
+sheet, and optionally records it. A blind Week 1, 2026 backtest
 (`scripts/backtest_week1.py`) ran the full pipeline end to end
 successfully.
 
 Two open validation items: Phase 3's lookahead cross-check (projected
 spreads within ~1.5 points of real lookahead lines) hadn't passed as of its
-first commit — worth rechecking as more lookahead weeks of real data build
-up. Phase 6's 5-random-seed stability check (`scripts/validate_portfolio.py`,
+first commit. Revisited: fitting ratings on every real week so far this
+season combined, instead of just the current week, plus a small ridge
+(`DEFAULT_SEASON_TO_DATE_RIDGE`), brought the real Week 4, 2026 lookahead
+MAE from 2.39 down to 1.73 — a real, validated improvement, but still short
+of the 1.5-point bar. See plan.md's Phase 3 section for the full diagnosis
+(it's almost entirely single-week-fit noise, not real team-strength
+change) and what didn't help (recency weighting). Worth rechecking again as
+more real weeks accumulate. Phase 6's 5-random-seed stability check
+(`scripts/validate_portfolio.py`,
 run against real Week 4, 2026 data) came back a near-tie rather than a
 clean pass — entries shuffled between three of five candidate teams across
 seeds, with mean payouts within about ±3% of each other at 5,000 paths;

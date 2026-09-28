@@ -1,7 +1,13 @@
 import pandas as pd
 import pytest
 
-from survivor.data.survivorgrid_client import dedupe_schedule_games, parse_pick_grid, parse_schedule_grid
+import survivor.data.survivorgrid_client as survivorgrid_client
+from survivor.data.survivorgrid_client import (
+    dedupe_schedule_games,
+    fetch_season_to_date_games,
+    parse_pick_grid,
+    parse_schedule_grid,
+)
 
 # A minimal fixture mirroring survivorgrid.com's real table structure (verified
 # via a live raw-HTML pull): four <td class="dist"> for EV/W%/P%, a
@@ -279,3 +285,82 @@ def test_extracts_loss_result():
 def test_upcoming_week_has_no_result():
     df = parse_pick_grid(SAMPLE_GRID_HTML)
     assert pd.isna(df[df["team"] == "KC"].iloc[0]["result"])
+
+
+def _one_column_page(cell_html: str, cell_class: str = "gc") -> str:
+    # A minimal single-gc-column page: parse_schedule_grid(html, start_week=W)
+    # will tag this one column's game as week W, whatever W is passed for
+    # that call -- exactly what fetch_season_to_date_games relies on (each
+    # week's own page has *its own* game at offset 0). is_home comes from
+    # cell_class containing "rd", not from an "@" in cell_html -- that's
+    # just a display marker, per parse_schedule_grid's real behavior.
+    return f"""
+    <table class="datatable" id="grid">
+      <thead><tr><th>EV</th><th>W%</th><th>P%</th><th>Team</th><th>1</th></tr></thead>
+      <tbody>
+        <tr><td class="dist">1.0</td><td class="dist">50%</td><td class="dist">5%</td>
+            <td class="teamname">LAC</td>
+            <td class="{cell_class}">{cell_html}</td>
+            {_FV_CELL}</tr>
+      </tbody>
+    </table>
+    """
+
+
+_BYE_PAGE = f"""
+<table class="datatable" id="grid">
+  <thead><tr><th>EV</th><th>W%</th><th>P%</th><th>Team</th><th>1</th></tr></thead>
+  <tbody>
+    <tr><td class="dist">-</td><td class="dist">-</td><td class="dist">-</td>
+        <td class="teamname">LAC</td>
+        <td class="gc bye">BYE</td>
+        {_FV_CELL}</tr>
+  </tbody>
+</table>
+"""
+
+WEEK_PAGES = {
+    1: _one_column_page('ARI<br><span class="spread">-9.5</span>'),  # LAC home vs ARI
+    2: _one_column_page('@BUF<br><span class="spread">3</span>', cell_class="gc rd"),  # LAC away at BUF
+    3: _BYE_PAGE,
+}
+
+
+def test_fetch_season_to_date_games_fetches_one_page_per_week(monkeypatch):
+    calls = []
+
+    def fake_fetch_week_html(year, week):
+        calls.append((year, week))
+        return WEEK_PAGES[week]
+
+    monkeypatch.setattr(survivorgrid_client, "fetch_week_html", fake_fetch_week_html)
+    monkeypatch.setattr(survivorgrid_client.time, "sleep", lambda _: None)
+
+    fetch_season_to_date_games(2026, through_week=3, delay_seconds=0)
+    assert calls == [(2026, 1), (2026, 2), (2026, 3)]
+
+
+def test_fetch_season_to_date_games_tags_each_row_with_its_own_week(monkeypatch):
+    # No counterpart row is provided for either fixture (a single team's
+    # page in isolation), so dedupe_schedule_games' fallback always labels
+    # that row's own team as "home" -- home/away preference itself is
+    # covered by dedupe_schedule_games' own tests. What this test actually
+    # verifies is that each week's own page contributes its own opponent,
+    # not week1's data relabeled for every week.
+    monkeypatch.setattr(survivorgrid_client, "fetch_week_html", lambda year, week: WEEK_PAGES[week])
+    monkeypatch.setattr(survivorgrid_client.time, "sleep", lambda _: None)
+
+    games = fetch_season_to_date_games(2026, through_week=3, delay_seconds=0)
+    assert set(games["week"]) == {1, 2}  # week 3 is a bye, dropped -- see next test
+    week1 = games[games.week == 1].iloc[0]
+    assert week1["home_team"] == "LAC" and week1["away_team"] == "ARI"
+    week2 = games[games.week == 2].iloc[0]
+    assert week2["home_team"] == "LAC" and week2["away_team"] == "BUF"
+
+
+def test_fetch_season_to_date_games_drops_bye_weeks(monkeypatch):
+    monkeypatch.setattr(survivorgrid_client, "fetch_week_html", lambda year, week: WEEK_PAGES[week])
+    monkeypatch.setattr(survivorgrid_client.time, "sleep", lambda _: None)
+
+    games = fetch_season_to_date_games(2026, through_week=3, delay_seconds=0)
+    assert not (games["week"] == 3).any()

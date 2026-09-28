@@ -50,6 +50,16 @@ use a lower --n-paths for a quick look and raise it for the final
 pre-lock run. Diverged histories cost more (up to one solve per distinct
 history per team, not one total).
 
+Rating fit uses this week's real spreads plus every earlier week's real
+closing spreads this season (survivor.data.survivorgrid_client.
+fetch_season_to_date_games, free/keyless -- one extra request per prior
+week, paced at 1/sec) rather than this week's spreads alone: fitting on
+just one week is severely underdetermined (16 games informing 32 teams'
+ratings), and that noise otherwise carries straight into the future-week
+projections the rollout depends on. Still an open item even with this fix
+-- see DEFAULT_SEASON_TO_DATE_RIDGE's comment in ratings.py and
+plan.md's Phase 3 section for the real numbers and what's still unresolved.
+
 Run: .venv/bin/python scripts/run_weekly.py --week 4
 """
 
@@ -64,9 +74,10 @@ import pandas as pd
 from survivor.data import my_entries, schedule_client
 from survivor.data.odds_client import OddsAPIClient, parse_odds_events
 from survivor.data.storage import DEFAULT_STORE_ROOT, save_raw_pull
+from survivor.data.survivorgrid_client import fetch_season_to_date_games
 from survivor.decision.portfolio import greedy_local_entry_allocation, score_entries
 from survivor.probability.current_week import compute_current_week_probabilities, compute_current_week_spreads
-from survivor.probability.ratings import DEFAULT_RIDGE, fit_team_ratings
+from survivor.probability.ratings import DEFAULT_SEASON_TO_DATE_RIDGE, fit_team_ratings
 from survivor.simulation.field_simulator import simulate_rival_field, team_elimination_week
 
 FINAL_WEEK = 18
@@ -135,8 +146,20 @@ def main() -> None:
         )
 
     week_spreads = compute_current_week_spreads(week_odds)
-    fit = fit_team_ratings(week_spreads, ridge=DEFAULT_RIDGE)
-    print(f"\nFitted ratings from {len(week_spreads)} Week {args.week} games "
+
+    if args.week > 1:
+        print(f"\nPulling Weeks 1-{args.week - 1} real closing spreads from SurvivorGrid for the rating fit "
+              f"({args.week - 1} requests, free/keyless, paced 1/sec)...")
+        season_to_date = fetch_season_to_date_games(args.year, through_week=args.week - 1)
+    else:
+        season_to_date = pd.DataFrame(columns=["week", "home_team", "away_team", "home_spread"])
+
+    fit_games = pd.concat(
+        [season_to_date[["home_team", "away_team", "home_spread"]], week_spreads[["home_team", "away_team", "home_spread"]]],
+        ignore_index=True,
+    )
+    fit = fit_team_ratings(fit_games, ridge=DEFAULT_SEASON_TO_DATE_RIDGE)
+    print(f"\nFitted ratings from {len(fit_games)} games (Weeks 1-{args.week}, real spreads) "
           f"(home-field advantage: {fit.home_field_advantage:.2f})")
 
     week_probs = compute_current_week_probabilities(week_odds)

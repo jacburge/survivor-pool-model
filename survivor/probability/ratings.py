@@ -36,6 +36,34 @@ class RatingFit:
 # ratings) to regularize toward instead of a flat 0.
 DEFAULT_RIDGE = 0.0
 
+# For fitting on multiple weeks of accumulated real spreads at once (see
+# survivor.data.survivorgrid_client.fetch_season_to_date_games), not a
+# single week -- DEFAULT_RIDGE=0.0's reasoning doesn't carry over here.
+# Once several weeks connect the schedule graph, ridge stops being purely
+# harmful the way it was for a single disconnected week: it trades a little
+# fit quality for real variance reduction. On real 2026 data (Weeks 1-3
+# fit, Week 4 held out as the lookahead check, scripts/validate_ratings.py):
+# ridge=0.0 gave in-sample MAE 0.87 but lookahead MAE 2.01 (worse than
+# using the single current week alone was *supposed* to be, though still
+# better than that single-week fit's actual 2.39); ridge in [0.2, 0.28]
+# plateaus around lookahead MAE 1.72-1.73 while in-sample MAE stays under
+# the 1-point bar through 0.2 (0.94) but crosses it by 0.3 (1.01). 0.2 is
+# the safe choice within that plateau. Tried recency weighting (more recent
+# weeks counted more via fit_team_ratings' weights parameter) as an
+# alternative lever first -- it didn't help at all (lookahead MAE stayed
+# 1.99-2.17 across several weighting schemes), consistent with the
+# DEFAULT_WEEKLY_RATING_STD finding that within-season true rating drift is
+# tiny (~0.40/week) next to single-week fit noise (~2.16) -- there's
+# essentially no "recent form matters more" signal to weight toward yet.
+# Even at its best, this doesn't clear the plan's 1.5-point bar (1.72 vs.
+# 1.5) -- errors are broadly spread across games (0.43 to 4.11), not a
+# couple of outliers, so the residual gap is plausibly a mix of real-time
+# news between weeks that a backward-looking spread fit can't see and
+# still-limited history (3 games/team so far). Revisit as more real weeks
+# accumulate -- both more fitting data and, eventually, more than one
+# held-out lookahead week to validate ridge against instead of just one.
+DEFAULT_SEASON_TO_DATE_RIDGE = 0.2
+
 # Calibrated against real historical elimination curves
 # (scripts/validate_elimination_curve.py), not fit directly -- there's no
 # multi-week rating history yet to feed fit_weekly_rating_std. Counter-
@@ -71,12 +99,23 @@ DEFAULT_RIDGE = 0.0
 DEFAULT_WEEKLY_RATING_STD = 1.0
 
 
-def fit_team_ratings(games: pd.DataFrame, ridge: float = 0.0) -> RatingFit:
-    """Least squares fit of one rating per team plus home-field advantage.
+def fit_team_ratings(games: pd.DataFrame, ridge: float = 0.0, weights: np.ndarray | pd.Series | None = None) -> RatingFit:
+    """Least squares (or weighted least squares) fit of one rating per team plus home-field advantage.
 
     games must have columns: home_team, away_team, home_spread (bookmaker
     spread for the home team; negative means the home team is favored).
     Fits -home_spread ~= r_home - r_away + h.
+
+    weights, if given, is one weight per game (same order as games' rows) --
+    e.g. to weight more recent weeks more heavily when fitting on several
+    weeks of accumulated real spreads (see fit_season_to_date_ratings).
+    Implemented as standard weighted least squares via the reweighted-OLS
+    trick: scale each game's row of the design matrix and target by
+    sqrt(weight) before solving (minimizing sum(w_i * residual_i^2) this way
+    is equivalent to ordinary least squares on the rescaled rows). The
+    sum-to-zero constraint row and any ridge rows are never reweighted --
+    they're a fixed-strength prior/constraint, not a data point to
+    up- or down-weight.
 
     A single week's games is a perfect matching -- 32 teams paired into 16
     disjoint games with no edges between pairs -- so within a pair, only
@@ -102,15 +141,24 @@ def fit_team_ratings(games: pd.DataFrame, ridge: float = 0.0) -> RatingFit:
     n_games = len(games)
     n_teams = len(teams)
 
+    if weights is None:
+        sqrt_weights = np.ones(n_games)
+    else:
+        weights = np.asarray(weights, dtype=float)
+        if len(weights) != n_games:
+            raise ValueError(f"weights must have one entry per game ({n_games}), got {len(weights)}")
+        sqrt_weights = np.sqrt(weights)
+
     # Columns: one per team (+1 home, -1 away), plus one for home-field advantage.
     design = np.zeros((n_games + 1, n_teams + 1))
     target = np.zeros(n_games + 1)
 
     for row, (_, game) in enumerate(games.iterrows()):
-        design[row, team_index[game["home_team"]]] = 1.0
-        design[row, team_index[game["away_team"]]] = -1.0
-        design[row, -1] = 1.0
-        target[row] = -game["home_spread"]
+        w = sqrt_weights[row]
+        design[row, team_index[game["home_team"]]] = w
+        design[row, team_index[game["away_team"]]] = -w
+        design[row, -1] = w
+        target[row] = -game["home_spread"] * w
 
     # Extra row pins sum(ratings) = 0 to resolve the additive degeneracy.
     design[n_games, :n_teams] = 1.0

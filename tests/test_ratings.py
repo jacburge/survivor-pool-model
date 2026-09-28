@@ -160,3 +160,54 @@ def test_ridge_trades_off_in_sample_fit_quality():
     no_ridge_mae = fit_team_ratings(games, ridge=0.0).residuals.abs().mean()
     with_ridge_mae = fit_team_ratings(games, ridge=1.0).residuals.abs().mean()
     assert with_ridge_mae > no_ridge_mae
+
+
+def test_uniform_weights_match_unweighted_fit():
+    true_ratings = {"NE": 3.0, "NYJ": -2.0, "BUF": 5.0, "MIA": -1.0}
+    matchups = [
+        ("NE", "NYJ"), ("NYJ", "NE"),
+        ("BUF", "MIA"), ("MIA", "BUF"),
+        ("NE", "MIA"), ("MIA", "NE"),
+        ("BUF", "NYJ"), ("NYJ", "BUF"),
+    ]
+    games = _synthetic_games(true_ratings, 2.0, matchups)
+
+    unweighted = fit_team_ratings(games)
+    uniformly_weighted = fit_team_ratings(games, weights=np.ones(len(games)))
+    for team in true_ratings:
+        assert uniformly_weighted.ratings[team] == pytest.approx(unweighted.ratings[team])
+    assert uniformly_weighted.home_field_advantage == pytest.approx(unweighted.home_field_advantage)
+
+
+def test_weights_rejects_wrong_length():
+    games = _synthetic_games({"NE": 1.0, "BUF": -1.0}, 0.0, [("NE", "BUF"), ("BUF", "NE")])
+    with pytest.raises(ValueError):
+        fit_team_ratings(games, weights=[1.0, 2.0, 3.0])  # 3 weights, 2 games
+
+
+def test_higher_weight_pulls_the_fit_toward_that_games_own_spread():
+    # A simple cycle (A-B, B-C, C-A) is always fit exactly regardless of
+    # weights -- the shared home-field-advantage term absorbs any
+    # "inconsistency" around a cycle (verified separately: residuals are
+    # ~0 for a bare 3-cycle no matter the target spreads). Adding a 4th,
+    # redundant A-vs-C game with a target that conflicts with what the
+    # first three already imply creates genuine overdetermination: no
+    # rating/HFA choice can satisfy all four games at once. Weighting the
+    # A-vs-B game heavily should then pull the fitted A-vs-B spread much
+    # closer to its own -3.0 than an equal-weight fit would.
+    games = pd.DataFrame(
+        [
+            {"home_team": "A", "away_team": "B", "home_spread": -3.0},
+            {"home_team": "B", "away_team": "C", "home_spread": -2.0},
+            {"home_team": "C", "away_team": "A", "home_spread": -2.0},
+            {"home_team": "A", "away_team": "C", "home_spread": -10.0},
+        ]
+    )
+
+    def implied_ab_spread(fit):
+        return -(fit.ratings["A"] - fit.ratings["B"] + fit.home_field_advantage)
+
+    unweighted = fit_team_ratings(games)
+    heavily_weighted = fit_team_ratings(games, weights=[100.0, 1.0, 1.0, 1.0])
+
+    assert abs(implied_ab_spread(heavily_weighted) - (-3.0)) < abs(implied_ab_spread(unweighted) - (-3.0))

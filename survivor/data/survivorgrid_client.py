@@ -147,6 +147,36 @@ def dedupe_schedule_games(schedule_grid: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["week", "home_team", "away_team", "home_spread"])
 
 
+def fetch_season_to_date_games(year: int, through_week: int, delay_seconds: float = 1.0) -> pd.DataFrame:
+    """Every already-played week's real closing spreads, weeks 1..through_week.
+
+    One fetch per week, each week's own page for that week's own real
+    closing line (not a later page's stale lookahead projection -- see
+    parse_schedule_grid's docstring for why that distinction matters). Built
+    for fitting ratings.fit_team_ratings on multiple weeks of real market
+    data instead of just the current week alone: a single week is just 16
+    games informing 32 teams' ratings (severely underdetermined, see
+    fit_team_ratings' docstring), so its projections for weeks beyond the
+    real lookahead window carry real noise. Accumulating the whole season so
+    far cuts that noise roughly by sqrt(games per team) -- confirmed on real
+    2026 data (scripts/validate_ratings.py): fitting on Weeks 1-3 combined
+    and projecting Week 4 brought lookahead MAE from 2.39 (Week 3 alone)
+    down to 2.01, and combined with a small ridge, to about 1.73.
+
+    Paced at 1 request/second out of courtesy -- unofficial, undocumented
+    source with no published rate limit.
+    """
+    frames = []
+    for week in range(1, through_week + 1):
+        html = fetch_week_html(year, week)
+        schedule_grid = parse_schedule_grid(html, start_week=week)
+        all_games = dedupe_schedule_games(schedule_grid)
+        week_games = all_games[all_games["week"] == week].dropna()
+        frames.append(week_games)
+        time.sleep(delay_seconds)
+    return pd.concat(frames, ignore_index=True)
+
+
 def _parse_percent(text: str) -> float | None:
     text = text.strip()
     try:

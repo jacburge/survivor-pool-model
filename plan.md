@@ -17,15 +17,39 @@ open validation gap. Status by phase:
 - **Phase 2 (Current-week probabilities):** done. Devig plus tie adjustment
   is wired to real odds and validated against a published devigged
   consensus (`scripts/validate_current_week.py`).
-- **Phase 3 (Future-week probabilities):** done, with one open item. The
-  rating fit meets the in-sample spread-reproduction bar; the lookahead
-  cross-check bar (projections within ~1.5 points of real lookahead lines)
-  had not been met as of the first Phase 3 commit ("in-sample bar met,
-  lookahead not yet") — rerun `scripts/validate_ratings.py` as more
-  lookahead weeks of real data accumulate. Separately, `DEFAULT_WEEKLY_RATING_STD`
-  (weekly rating-uncertainty) was revisited using real week-over-week rating
-  history (`survivor/data/rating_history.py`, backfilled from 2023-2025) and
-  kept at 1.0 rather than either raw calibration estimate; the reasoning is
+- **Phase 3 (Future-week probabilities):** done, with one open item, revisited
+  and improved but not fully resolved. The rating fit meets the in-sample
+  spread-reproduction bar; the lookahead cross-check bar (projections within
+  ~1.5 points of real lookahead lines) had not been met as of the first
+  Phase 3 commit (single-week fit: 2.39 MAE on real Week 4, 2026 lines).
+  Diagnosed the likely cause using the same noise-vs-drift decomposition
+  from `DEFAULT_WEEKLY_RATING_STD`'s investigation: a single week's fit is
+  16 games informing 32 teams' ratings, almost entirely noise
+  (`sigma_noise≈2.16`, next to essentially no real week-to-week drift,
+  `sigma_drift≈0.40`), and that noise is most of what the lookahead
+  error measures. Fixed by fitting on every real week so far this season
+  combined, not the current week alone
+  (`survivor.data.survivorgrid_client.fetch_season_to_date_games`, free
+  SurvivorGrid pulls, one per past week) plus a modest ridge (added
+  `weights` support and `DEFAULT_SEASON_TO_DATE_RIDGE=0.2` to
+  `fit_team_ratings`/`ratings.py`). On real Weeks 1-3 fit, Week 4 held out:
+  MAE went 2.39 (single week) → 2.01 (3 weeks, no ridge) → 1.73 (3 weeks +
+  ridge) — a real, validated 28% improvement, but still short of the 1.5
+  bar. Tried recency weighting first as an alternative lever; it didn't
+  help at all, consistent with the tiny drift finding — there's essentially
+  no "recent form" signal yet to weight toward. Errors are broadly spread
+  across games (0.43-4.11), not a couple of outliers, so the residual gap
+  is plausibly real-time news a backward-looking spread fit can't see, plus
+  still-limited history (3 games/team). `scripts/run_weekly.py` now fits
+  this way (real spread data through the current week) rather than the
+  current week alone. Revisit `scripts/validate_ratings.py` as more real
+  weeks accumulate -- both more fitting data and, eventually, more than one
+  held-out lookahead week to validate ridge against.
+
+  Separately, `DEFAULT_WEEKLY_RATING_STD` (weekly rating-uncertainty) was
+  revisited using real week-over-week rating history
+  (`survivor/data/rating_history.py`, backfilled from 2023-2025) and kept
+  at 1.0 rather than either raw calibration estimate; the reasoning is
   recorded as a comment on `DEFAULT_WEEKLY_RATING_STD` in
   `survivor/probability/ratings.py`.
 - **Phase 4 (Pick popularity model):** done. The softmax popularity model is
