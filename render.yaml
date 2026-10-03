@@ -14,14 +14,14 @@
 # never needs to be memorized.
 
 databases:
-  - name: trainò-db
+  - name: survivor-db
     plan: free
-    databaseName: trainò
-    user: trainò
+    databaseName: survivor
+    user: survivor
 
 services:
   - type: web
-    name: trainò-api
+    name: survivor-api
     env: python
     plan: free
     buildCommand: "pip install -r api/requirements.txt && pip install -e ."
@@ -29,7 +29,7 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: trainò-db
+          name: survivor-db
           property: connectionString
       - key: APP_PASSWORD
         sync: false
@@ -37,7 +37,7 @@ services:
         sync: false
 
   - type: cron
-    name: trainò-weekly-job
+    name: survivor-weekly-job
     env: python
     plan: free
     buildCommand: "pip install -r api/requirements.txt && pip install -e ."
@@ -52,7 +52,7 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: trainò-db
+          name: survivor-db
           property: connectionString
       - key: THE_ODDS_API_KEY
         sync: false
