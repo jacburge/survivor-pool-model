@@ -8,9 +8,11 @@ the database. Heavy compute stays out of the request path by construction.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from auth import check_password, issue_token, require_auth
@@ -314,3 +316,10 @@ def update_config(league_id: int, body: LeagueConfigIn):
         return {"ok": True}
     finally:
         db.close()
+
+
+# Serve the web/ pages from the same service, so one Render web service is the
+# whole app. Mounted last so it never shadows an API route.
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if _WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
