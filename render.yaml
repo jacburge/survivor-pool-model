@@ -48,7 +48,7 @@ services:
     # that week rather than trusting this schedule, same as any other
     # odd week (bye weeks, a flexed game, etc).
     schedule: "0 23 * * 6"
-    startCommand: "python scripts/run_weekly_and_ingest.py --league-id 1 --record"
+    startCommand: "timeout 1800 python scripts/run_weekly_and_ingest.py --league-id 1 --record"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
