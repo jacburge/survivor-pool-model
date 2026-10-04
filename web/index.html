@@ -96,8 +96,8 @@ async function load() {
     <div class="cols">${cols}</div>
     <div class="side">
       <div class="eyebrow">If you submit this</div>
-      <div class="big">$${rec.expected_total_payout.toFixed(2)}</div>
-      <div class="kv"><span>Standard error</span><b>± $${rec.payout_se.toFixed(2)}</b></div>
+      <div class="big">${rec.expected_total_payout != null ? "$" + rec.expected_total_payout.toFixed(2) : "—"}</div>
+      <div class="kv"><span>Standard error</span><b>${rec.payout_se != null ? "± $" + rec.payout_se.toFixed(2) : "—"}</b></div>
     </div>`;
 }
 
