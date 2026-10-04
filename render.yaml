@@ -39,7 +39,7 @@ services:
   - type: cron
     name: survivor-weekly-job
     env: python
-    plan: starter
+    plan: standard
     buildCommand: "pip install -r api/requirements.txt && pip install -e ."
     # Saturday 23:00 UTC = 7pm ET on the US mainland, after Brent's
     # usual Saturday-noon count and well ahead of Sunday 1pm ET kickoffs.
