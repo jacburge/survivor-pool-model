@@ -3,9 +3,8 @@ back -- run_weekly.py (hers, untouched) then ingest.py (reads its output
 into the database). Nothing new here; this just chains the two commands
 Megan runs by hand today, so a cron job can run them unattended.
 
-Reads expected payout / SE from run_weekly.py's own stdout rather than
-needing a third flag -- it already prints a line shaped exactly like:
-  Expected total payout: 576.95 (SE 6.77)
+ingest.py reads the expected payout / SE / objective from the
+latest_summary.json that run_weekly.py writes, not from its stdout.
 
 Run: python scripts/run_weekly_and_ingest.py --week 5 --league-id 1 \
        --n-rivals <Brent's latest count> --pot <latest pot> --record
@@ -13,12 +12,10 @@ Run: python scripts/run_weekly_and_ingest.py --week 5 --league-id 1 \
 from __future__ import annotations
 
 import argparse
-import re
 import subprocess
 import sys
 from pathlib import Path
 
-PAYOUT_LINE = re.compile(r"Expected total payout:\s*([\d.]+)\s*\(SE\s*([\d.]+)\)")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -79,17 +76,10 @@ def main() -> None:
         print(result.stderr, file=sys.stderr)
         raise SystemExit(f"run_weekly.py failed (exit {result.returncode}) -- nothing ingested.")
 
-    match = PAYOUT_LINE.search(result.stdout)
-    if match is None:
-        raise SystemExit("run_weekly.py succeeded but its payout line wasn't found in stdout -- "
-                          "check it still prints 'Expected total payout: X (SE Y)' unchanged.")
-    payout, se = match.group(1), match.group(2)
-
     ingest_cmd = [
         sys.executable, str(REPO_ROOT / "api" / "ingest.py"),
         "--league-id", str(args.league_id), "--week", str(args.week),
         "--store-root", str(store_root),
-        "--payout", payout, "--se", se,
     ]
     print(f"\n$ {' '.join(ingest_cmd)}")
     result2 = subprocess.run(ingest_cmd, cwd=REPO_ROOT / "api", capture_output=True, text=True)

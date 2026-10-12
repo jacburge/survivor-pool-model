@@ -7,7 +7,6 @@ the database. Heavy compute stays out of the request path by construction.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -15,32 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from ownership_parse import parse_ownership_text
+from pick_rules import validate_pick
 from seed import seed_if_empty
+from survivor.data.team_keys import ALL_TEAMS
 from auth import check_password, issue_token, require_auth
 from models import Entry, League, Ownership, Pick, Recommendation, SessionLocal, init_db
-
-try:
-    from survivor.data.team_keys import to_abbreviation
-except ImportError:
-    to_abbreviation = None  # her package not installed in this environment -- fall back to raw text
-
-# Her to_abbreviation only knows full names ("Kansas City Chiefs") and
-# existing abbreviations -- not bare nicknames. Splash's own export uses
-# nicknames only ("Chiefs", "Seahawks"), so without this map almost every
-# real paste would silently fail to resolve and never match a team on the
-# board. Kept here, not in her package -- this is an ownership-paste
-# concern, not a general team-name one.
-NICKNAME_TO_ABBREVIATION = {
-    "CARDINALS": "ARI", "FALCONS": "ATL", "RAVENS": "BAL", "BILLS": "BUF",
-    "PANTHERS": "CAR", "BEARS": "CHI", "BENGALS": "CIN", "BROWNS": "CLE",
-    "COWBOYS": "DAL", "BRONCOS": "DEN", "LIONS": "DET", "PACKERS": "GB",
-    "TEXANS": "HOU", "COLTS": "IND", "JAGUARS": "JAX", "JAGS": "JAX",
-    "CHIEFS": "KC", "RAIDERS": "LV", "CHARGERS": "LAC", "RAMS": "LAR",
-    "DOLPHINS": "MIA", "VIKINGS": "MIN", "PATRIOTS": "NE", "SAINTS": "NO",
-    "GIANTS": "NYG", "JETS": "NYJ", "EAGLES": "PHI", "STEELERS": "PIT",
-    "49ERS": "SF", "NINERS": "SF", "SEAHAWKS": "SEA", "BUCCANEERS": "TB",
-    "BUCS": "TB", "TITANS": "TEN", "COMMANDERS": "WAS",
-}
 
 app = FastAPI(title="Survivor Pool API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -89,6 +68,8 @@ class RecommendationOut(BaseModel):
     week: int
     expected_total_payout: float | None
     payout_se: float | None
+    objective: str | None = None
+    win_probability: float | None = None
     picks: list[EntryPick]
 
 
@@ -103,6 +84,8 @@ def get_recommendation(league_id: int, week: int):
             week=week,
             expected_total_payout=rows[0].expected_total_payout,
             payout_se=rows[0].payout_se,
+            objective=rows[0].objective,
+            win_probability=rows[0].win_probability,
             picks=[
                 EntryPick(
                     entry_id=r.entry_id, team=r.team,
@@ -148,6 +131,12 @@ def get_entries(league_id: int):
         db.close()
 
 
+@app.get("/teams", response_model=list[str], dependencies=PROTECTED)
+def get_teams():
+    """Every NFL team abbreviation, for the pick dropdowns."""
+    return ALL_TEAMS
+
+
 class SavePickIn(BaseModel):
     entry_id: str
     week: int
@@ -166,11 +155,16 @@ def save_pick(league_id: int, body: SavePickIn):
         entry = db.query(Entry).filter_by(league_id=league_id, entry_id=body.entry_id).one_or_none()
         if entry is None:
             raise HTTPException(404, f"entry {body.entry_id!r} not found in league {league_id}")
+        used_before = [p.team for p in entry.picks if p.week < body.week]
+        try:
+            team = validate_pick(body.team, used_before)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
         pick = db.query(Pick).filter_by(entry_id_fk=entry.id, week=body.week).one_or_none()
         if pick is None:
             pick = Pick(entry_id_fk=entry.id, week=body.week)
             db.add(pick)
-        pick.team = body.team
+        pick.team = team
         pick.confirmed = body.confirmed
         db.commit()
         return {"ok": True}
@@ -245,43 +239,6 @@ def get_config(league_id: int):
 
 
 # ---------- 4. league ownership (who's picked what, reported from Splash) ----------
-
-LINE_RE = re.compile(r"^(?P<team>.+?)[\s,]+(?P<a>[\d,]+)\s*%?\s*(?P<b>[\d,]+)?\s*%?\s*$")
-
-
-def parse_ownership_text(text: str) -> list[dict]:
-    """Handles 'TEAM COUNT', 'TEAM PCT%', and 'TEAM PCT% COUNT' (Splash's
-    own Stats-tab order) per line. When both a percentage and a count are
-    present, the count wins -- it's the more precise of the two. Lines
-    that don't parse are skipped, not errored on, so one bad paste doesn't
-    block the rest."""
-    rows = []
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        m = LINE_RE.match(line)
-        if not m:
-            continue
-        team_raw = m.group("team").strip()
-        a = int(m.group("a").replace(",", ""))
-        b = m.group("b")
-        if b:
-            # "TEAM PCT% COUNT" -- a is the percentage, b is the count
-            pct, count = float(a), int(b.replace(",", ""))
-        elif "%" in line:
-            pct, count = float(a), None
-        else:
-            pct, count = None, a
-        team = team_raw.upper()
-        if to_abbreviation:
-            try:
-                team = to_abbreviation(team_raw)
-            except KeyError:
-                team = NICKNAME_TO_ABBREVIATION.get(team.replace(" ", ""), team)
-        rows.append({"team": team, "pct": pct, "pick_count": count})
-    return rows
-
 
 class OwnershipIn(BaseModel):
     week: int

@@ -9,22 +9,24 @@ This script is the bridge: read those, upsert into `recommendations` and
 `picks`. It's what a cron job calls right after run_weekly.py finishes --
 the weekly job's own code never needs to know the database exists.
 
-Run: python ingest.py --league-id 1 --week 4 --payout 576.95 --se 6.77 \
-       --store-root /path/to/survivor-pool-model/data_store
-(payout/se come from run_weekly.py's own stdout, since the CSV doesn't
-carry them -- small thing to add to her script's CSV output later.)
+Also read: data_store/pick_sheets/latest_summary.json -- expected payout, SE,
+objective and win probability, written by run_weekly.py.
+
+Run: python ingest.py --league-id 1 --week 4 --store-root /path/to/data_store
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 from models import Entry, Pick, Recommendation, SessionLocal, init_db
 
 
 def ingest_recommendation(db, league_id: int, week: int, pick_sheet_path: Path,
-                           expected_payout: float | None, se: float | None) -> int:
+                           expected_payout: float | None, se: float | None,
+                           objective: str | None = None, win_probability: float | None = None) -> int:
     if not pick_sheet_path.exists():
         print(f"  no pick sheet at {pick_sheet_path}, skipping recommendation ingest")
         return 0
@@ -43,6 +45,8 @@ def ingest_recommendation(db, league_id: int, week: int, pick_sheet_path: Path,
             existing.used_teams_before = row.get("used_teams_before", "")
             existing.expected_total_payout = expected_payout
             existing.payout_se = se
+            existing.objective = objective
+            existing.win_probability = win_probability
             n += 1
     return n
 
@@ -92,21 +96,38 @@ def export_picks(db, league_id: int, picks_csv_path: Path, before_week: int | No
     return len(rows)
 
 
+def load_summary(pick_sheet_dir: Path, week: int) -> dict:
+    """Read run_weekly.py's latest_summary.json. Refuses a summary for a different week, so a
+    stale file from an earlier run can never be ingested as this week's numbers."""
+    path = pick_sheet_dir / "latest_summary.json"
+    if not path.exists():
+        raise SystemExit(f"no run summary at {path} -- did run_weekly.py finish?")
+    summary = json.loads(path.read_text())
+    if summary.get("week") != week:
+        raise SystemExit(f"{path} is for week {summary.get('week')}, expected week {week} -- stale file?")
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--league-id", type=int, required=True)
     parser.add_argument("--week", type=int, required=True)
     parser.add_argument("--store-root", type=Path, required=True, help="path to survivor-pool-model/data_store")
-    parser.add_argument("--payout", type=float, default=None)
-    parser.add_argument("--se", type=float, default=None)
+    parser.add_argument("--payout", type=float, default=None, help="override the summary's expected payout")
+    parser.add_argument("--se", type=float, default=None, help="override the summary's standard error")
     args = parser.parse_args()
+
+    summary = load_summary(args.store_root / "pick_sheets", args.week)
+    payout = args.payout if args.payout is not None else summary["expected_total_payout"]
+    se = args.se if args.se is not None else summary["payout_se"]
 
     init_db()
     db = SessionLocal()
     try:
         n_rec = ingest_recommendation(
             db, args.league_id, args.week,
-            args.store_root / "pick_sheets" / "latest.csv", args.payout, args.se,
+            args.store_root / "pick_sheets" / "latest.csv", payout, se,
+            objective=summary.get("objective"), win_probability=summary.get("win_probability"),
         )
         n_pick = ingest_picks(db, args.league_id, args.store_root / "my_entries" / "picks.csv")
         db.commit()
