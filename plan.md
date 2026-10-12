@@ -2,11 +2,14 @@
 
 *Sep 24, 2026 · @Megan*
 
-## Progress as of September 25, 2026
+## Progress as of October 12, 2026
 
-Phases 0 through 5 are done, all in one day and well ahead of the Sep 25-Oct 2
-schedule below. See [README.md](README.md) for how to run things and the one
-open validation gap. Status by phase:
+Phases 0 through 6 are done, and Phase 7's pipeline piece and a first
+version of Phase 9 are live (Week 5 picks were entered; the weekly job now
+runs on Render). Phases 0 through 5 were finished in one day, well ahead of
+the Sep 25-Oct 2 schedule below. See [README.md](README.md) for how to run
+things and the one open validation gap. Status by phase (the Phase 0-5
+entries below were written Sep 25; later additions are noted in place):
 
 - **Phase 0 (Rules and data access):**
   confirmed - every downstream phase proceeded
@@ -128,6 +131,17 @@ open validation gap. Status by phase:
   stuck in a local optimum (96.86 vs. the true 97.55) whenever reaching the
   best assignment required two entries trading teams simultaneously —
   fixed by adding a pairwise-swap move alongside the single-entry one.
+
+  Added an `objective` option to both greedy searches (`OBJECTIVES` in
+  `portfolio.py`): `expected_payout` (risk-neutral, the original behavior)
+  or `win_probability` (chance at least one entry is paid), now the default
+  in `run_weekly.py`. Two entries on one team rise and fall together, so
+  the second objective spreads them apart, usually at some expected-payout
+  cost; each run prints both objectives' numbers on the same simulated
+  paths so that cost is visible rather than assumed. `AllocationResult`
+  also carries `win_probability`. Separately, `my_entries.used_teams` takes
+  `before_week` so re-running a week after `--record` doesn't count that
+  week's own pick as already used.
 - **Phase 7 (Lock day):** the "weekly pick sheet" piece exists
   (`scripts/run_weekly.py`: refresh real data, fit current ratings, run the
   simulator, recommend a per-entry allocation via
@@ -144,14 +158,33 @@ open validation gap. Status by phase:
   `greedy_local_allocation` would have, with no extra runtime — confirmed
   directly, not just argued, before treating it as safe to wire in
   unconditionally rather than branching on whether history exists.
-  Scheduled for October 1 (Thursday option only) and October 4.
+  Update (Oct 12): `run_weekly.py` also writes
+  `data_store/pick_sheets/latest_summary.json` (week, objective, expected
+  payout, SE, win probability) and the hosted weekly job
+  (`scripts/run_weekly_and_ingest.py`, Wednesday noon ET) ingests that file
+  rather than parsing printed output, refusing a summary for the wrong
+  week. Marking wins and losses is now a page in the hosted app (Results)
+  rather than a hand-run function, though it is still a manual step with no
+  automated results feed. Scheduled for October 1 (Thursday option only)
+  and October 4.
 - **Phase 8 (In-season additions):** only the rival tracker's storage layer
   is built ahead of need (`survivor/data/rival_tracker.py`: record/read
   revealed picks, used-team sets, per-week pick distributions). It has no
   real data yet since Week 4 hasn't happened. Popularity refinement from the
   tracked field, split-decision logic, and the exact endgame dynamic
   program are all not started.
-- **Phase 9 (Hosted multi-user version):** planned, not yet built — see
+- **Phase 9 (Hosted multi-user version):** first version built and
+  deployed on Render (blueprint in `render.yaml`): Postgres, a FastAPI
+  service in `api/`, static pages in `web/` (Board, Picks, Ownership,
+  Results, This week's numbers, Guide), and a weekly cron job. It serves
+  one league behind a single shared password; the user and league
+  membership tables exist but per-user accounts and per-league rule
+  separation are not built, so the "Done when" below is not met yet. The
+  Picks page offers each entry only teams it hasn't used, and the server
+  enforces that. Known open items: the auth settings fall back to
+  development defaults if `APP_PASSWORD`/`SECRET_KEY` aren't set,
+  there's no login rate limiting, the Picks dropdown doesn't know which
+  teams are on a bye, and the API has little automated test coverage. See
   below.
 
 ## Goal
