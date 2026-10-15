@@ -44,6 +44,9 @@ cp .env.example .env   # fill in THE_ODDS_API_KEY (thin free tier: 500 req/month
 .venv/bin/pytest
 ```
 
+`tests/test_ingest_summary.py` needs SQLAlchemy (an API dependency, in
+`api/requirements.txt`) and skips itself if it isn't installed.
+
 ## Weekly recommendation
 
 `run_weekly.py` is the actual production entry point: refreshes real data
@@ -66,7 +69,22 @@ current week alone -- see Status below for why. Saves the pick sheet to
 .venv/bin/python scripts/run_weekly.py --week 4 --n-paths 5000          # quick/rough look
 .venv/bin/python scripts/run_weekly.py --week 4 --n-entries 10 --n-rivals 500
 .venv/bin/python scripts/run_weekly.py --week 4 --record                # also commit picks into data_store/my_entries/
+.venv/bin/python scripts/run_weekly.py --week 6 --objective expected_payout   # risk-neutral search instead of the default
 ```
+
+`--objective` picks what the allocation search maximizes. The default,
+`win_probability`, maximizes the chance at least one entry gets paid, which
+spreads entries apart when stacking them on one team would make them rise
+and fall together (usually at some expected-payout cost). `expected_payout`
+maximizes the average total payout and will happily put two entries on the
+same team. Whichever is chosen, the other's numbers are printed alongside
+it on the same simulated paths so the tradeoff is visible. Re-running a week
+after `--record` is safe: that week's own recorded pick is not counted as
+"already used".
+
+Each run also writes `data_store/pick_sheets/latest_summary.json` (week,
+objective, expected payout, SE, win probability, path count). The hosted
+weekly job ingests that file, not the script's printed output.
 
 Default `--n-paths 20000` runs in about half a minute (measured offline,
 before the network calls); raise it (e.g. 80000) for the final pre-lock
@@ -84,6 +102,31 @@ for now -- there's no automated results feed yet.
 
 Known simplification: assumes your entries have no picks locked in before
 `--week` (true today -- confirm before reusing this for a mid-season week).
+
+## Hosted app (Phase 9)
+
+A password-gated web app over the weekly output, deployed on Render via
+[render.yaml](render.yaml) (Postgres, a FastAPI web service, and a weekly
+cron job). See [hosting_plan.md](hosting_plan.md) for the design.
+
+- `api/` -- FastAPI service (`app.py`), SQLAlchemy models, one shared
+  password (`auth.py`), and `ingest.py`, which loads a weekly run's pick
+  sheet and summary into the database. The API never runs a simulation.
+- `web/` -- static pages served by the same service: Board (the model's
+  plan), Picks (per-entry dropdown of teams that entry hasn't used; the
+  server rejects used or unknown teams too), Ownership (paste from Splash),
+  Results (mark each pick won/lost), This week's numbers (pot, field size,
+  current week), and a Guide with the weekly routine.
+- `scripts/run_weekly_and_ingest.py` -- what the cron job runs (Wednesday
+  noon ET): restores saved picks from the database, runs `run_weekly.py`,
+  then ingests the result.
+
+Set `APP_PASSWORD` and `SECRET_KEY` in the Render dashboard; they are not
+in the repo, and the code's built-in defaults are for local development
+only. To run locally: `pip install -r api/requirements.txt`, then
+`cd api && uvicorn app:app --port 8000` (SQLite at `api/survivor.db` unless
+`DATABASE_URL` is set). Columns added to a model after first deploy are
+added to existing tables on startup (`init_db`).
 
 ## Pull real data without a recommendation
 
@@ -122,6 +165,8 @@ to already be populated.
 - `scripts/run_weekly.py` — the production entry point (Phase 7's pipeline
   piece): refresh data, fit ratings, simulate, recommend, archive, and
   optionally record.
+- `api/`, `web/`, `scripts/run_weekly_and_ingest.py` — the hosted app and
+  its weekly job (Phase 9); see "Hosted app" above.
 
 ## Status
 
@@ -129,7 +174,7 @@ Phases 0 through 6 are done — data ingestion, current- and future-week win
 probabilities, the pick popularity model, the Monte Carlo field simulator
 with rollout scoring, and joint portfolio allocation across entries
 (including entries with diverged histories, from Week 5 onward), all wired
-up and tested (176 tests passing). Phase 7's pipeline piece is also done:
+up and tested. Phase 7's pipeline piece is also done:
 `scripts/run_weekly.py` refreshes real data, fits ratings on every real week
 so far this season combined (not just the current week -- see below),
 runs the simulator, recommends a per-entry allocation, archives the pick
@@ -173,10 +218,12 @@ Phase 8 (the rival tracker and your own entry tracker both exist as storage
 layers, but popularity refinement from the tracked field, split-decision
 logic, and the exact endgame solver are still open, and there's no
 automated results feed yet — marking who won or lost is a manual step), and
-Phase 9 (a hosted, multi-user/multi-league version — planned in plan.md,
-not started). See [plan.md](plan.md)'s "Progress" section for the full
+the multi-user/multi-league part of Phase 9 (the hosted app above is
+live for a single league with one shared password; per-user accounts are
+not built, and the API has no automated tests beyond the ownership parser,
+pick rules and ingest). See [plan.md](plan.md)'s "Progress" section for the full
 phase-by-phase breakdown.
 
-This checkout has no `.env` or `data_store/` populated (both git-ignored) —
+`.env` and `data_store/` are git-ignored, so a fresh clone has neither —
 run the Setup and "Pull real data" steps above before running scripts that
 touch real data.

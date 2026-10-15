@@ -7,6 +7,7 @@ import pytest
 
 from survivor.decision.portfolio import (
     MAX_ENTRIES,
+    OBJECTIVES,
     best_allocations,
     enumerate_allocations,
     greedy_local_allocation,
@@ -477,3 +478,115 @@ def test_score_entries_matches_a_per_entry_reference_including_emptied_fields():
 
     assert (sim.alive_count_by_week.min(axis=0) == 0).any()
     np.testing.assert_array_equal(score_entries(sim, arrays), _reference_score_entries(sim, arrays))
+
+
+# --- objective: "expected_payout" (default) vs. "win_probability" ---
+
+
+def _single_week_sim_with_fixed_outcomes(buf_survives: np.ndarray, kc_survives: np.ndarray, n_rivals=5, pot=700.0):
+    """A single-week FieldSimulation where BUF/KC's per-path survival is
+    dictated directly rather than driven by ratings, so the expected-payout
+    vs. win-probability tradeoff between stacking and splitting two entries
+    can be constructed exactly instead of hoped for from real randomness.
+    Single week means team_elimination_week needs no future assignment, so
+    an entry's elimination array is exactly its own team's team_wins row.
+    """
+    n_paths = len(buf_survives)
+    sim = _blank_field_simulation(
+        [4], n_paths=n_paths, n_rivals=n_rivals, pot=pot, alive_count_by_week=np.full((1, n_paths), n_rivals)
+    )
+    sim.playing[0, TEAM_INDEX["BUF"]] = True
+    sim.playing[0, TEAM_INDEX["KC"]] = True
+    sim.team_wins[0, :, TEAM_INDEX["BUF"]] = buf_survives
+    sim.team_wins[0, :, TEAM_INDEX["KC"]] = kc_survives
+    sim.rival_survivors = np.full(n_paths, n_rivals)
+    return sim
+
+
+def test_objectives_rejects_unknown_name():
+    sim = _real_sim()
+    with pytest.raises(ValueError):
+        greedy_local_entry_allocation(sim, {"e1": set(), "e2": set()}, ["BUF", "KC"], objective="bogus")
+    with pytest.raises(ValueError):
+        greedy_local_allocation(sim, ["BUF", "KC"], n_entries=2, objective="bogus")
+
+
+def test_greedy_local_entry_allocation_win_probability_objective_prefers_diversifying_over_a_higher_ev_stack():
+    # BUF survives 60% of paths, KC 50%, with KC's survival not a subset or
+    # superset of BUF's (constructed so the two are neither perfectly
+    # correlated nor independent, just genuinely different events) -- this
+    # is the scenario the plan's stacking note implies: expected payout
+    # favors stacking both entries on the better team (BUF), because
+    # expectation doesn't see that stacking means both entries live or die
+    # together, while win probability favors splitting them across BUF and
+    # KC, because an entry on KC can still pay out on paths where BUF alone
+    # would have left you with nothing.
+    n_paths = 100
+    buf_survives = np.zeros(n_paths, dtype=bool)
+    buf_survives[:60] = True
+    kc_survives = np.zeros(n_paths, dtype=bool)
+    kc_survives[:30] = True
+    kc_survives[60:80] = True
+    sim = _single_week_sim_with_fixed_outcomes(buf_survives, kc_survives)
+    used_teams_by_entry = {"e1": set(), "e2": set()}
+    candidate_teams = ["BUF", "KC"]
+
+    def brute_force_best(objective):
+        best_score, best_assignment = -1.0, None
+        for teams in product(candidate_teams, repeat=2):
+            assignment = dict(zip(used_teams_by_entry, teams))
+            arrays = {e: team_elimination_week(sim, t) for e, t in assignment.items()}
+            score = OBJECTIVES[objective](score_entries(sim, arrays))
+            if score > best_score:
+                best_score, best_assignment = score, assignment
+        return best_assignment
+
+    best_ev_assignment = brute_force_best("expected_payout")
+    best_win_prob_assignment = brute_force_best("win_probability")
+    assert set(best_ev_assignment.values()) == {"BUF"}
+    assert set(best_win_prob_assignment.values()) == {"BUF", "KC"}  # confirms this scenario is a real tradeoff
+
+    ev_result = greedy_local_entry_allocation(sim, used_teams_by_entry, candidate_teams)
+    win_prob_result = greedy_local_entry_allocation(
+        sim, used_teams_by_entry, candidate_teams, objective="win_probability"
+    )
+    assert ev_result == best_ev_assignment
+    assert win_prob_result == best_win_prob_assignment
+
+    ev_payouts = score_entries(sim, {e: team_elimination_week(sim, t) for e, t in ev_result.items()})
+    split_payouts = score_entries(sim, {e: team_elimination_week(sim, t) for e, t in win_prob_result.items()})
+    assert ev_payouts.mean() > split_payouts.mean()
+    assert (split_payouts > 0).mean() > (ev_payouts > 0).mean()
+
+
+def test_greedy_local_allocation_win_probability_objective_also_prefers_diversifying():
+    # same scenario as the entry-aware test above, via the team-count API
+    n_paths = 100
+    buf_survives = np.zeros(n_paths, dtype=bool)
+    buf_survives[:60] = True
+    kc_survives = np.zeros(n_paths, dtype=bool)
+    kc_survives[:30] = True
+    kc_survives[60:80] = True
+    sim = _single_week_sim_with_fixed_outcomes(buf_survives, kc_survives)
+
+    ev_result = greedy_local_allocation(sim, ["BUF", "KC"], n_entries=2)
+    win_prob_result = greedy_local_allocation(sim, ["BUF", "KC"], n_entries=2, objective="win_probability")
+
+    assert ev_result.allocation == {"BUF": 2}
+    assert win_prob_result.allocation == {"BUF": 1, "KC": 1}
+    assert ev_result.mean_payout > win_prob_result.mean_payout
+    assert win_prob_result.win_probability > ev_result.win_probability
+
+
+def test_allocation_result_win_probability_matches_its_own_payouts():
+    sim = _real_sim(n_paths=2000, seed=11)
+    result = greedy_local_allocation(sim, ["BUF", "KC", "NYJ"], n_entries=5)
+    elimination_weeks = {team: team_elimination_week(sim, team) for team in result.allocation}
+    payouts = score_allocation(sim, result.allocation, elimination_weeks)
+    assert result.win_probability == pytest.approx((payouts > 0).mean())
+
+
+def test_best_allocations_results_carry_win_probability():
+    sim = _real_sim()
+    results = best_allocations(sim, ["BUF", "KC"], n_entries=3)
+    assert all(0.0 <= r.win_probability <= 1.0 for r in results)

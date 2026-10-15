@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
 <link rel="stylesheet" href="theme.css">
-<style>.wrap{max-width:760px}</style>
+<style>.wrap{max-width:760px} select.pick.changed{border-color:var(--you);color:var(--you)}</style>
 </head>
 <body>
 <div class="wrap">
@@ -23,15 +23,14 @@
       <a class="navbtn" href="guide.html">Guide</a>
     </nav>
     <h1 id="h1">Picks</h1>
-    <p class="sub">Model's suggestion on the left. Type over it to go a different way — not locked to the recommendation.</p>
+    <p class="sub">Model's suggestion on the left. Choose a different team to go another way — not locked to the recommendation.</p>
     <table>
       <thead><tr><th>Entry</th><th>Model says</th><th>Your pick</th><th>On Splash?</th><th></th></tr></thead>
       <tbody id="rows"><tr><td colspan="5">Loading…</td></tr></tbody>
     </table>
     <div class="note">
-      Free-text field, not a dropdown — this doesn't yet check your pick against teams you've already used
-      or which teams are playing this week, so double-check before saving. Validating that against each
-      entry's real history is the next thing to add here.
+      Each dropdown lists only teams that entry hasn't used in an earlier week, and the server rejects a
+      used team too. It doesn't yet know which teams are on a bye this week, so check that before saving.
     </div>
   </div>
 </div>
@@ -41,10 +40,17 @@ requireAuthOrRedirect();
 const LEAGUE = 1;
 let WEEK = 4;
 
+function pickOptions(allTeams, usedBefore, current) {
+  const avail = allTeams.filter(t => !usedBefore.includes(t));
+  const blank = `<option value="" ${current ? "" : "selected"}>— choose —</option>`;
+  return blank + avail.map(t => `<option ${t === current ? "selected" : ""}>${t}</option>`).join("");
+}
+
 async function load() {
   WEEK = await getCurrentWeek(LEAGUE);
   document.getElementById("h1").textContent = `Week ${WEEK} picks`;
-  const [recRaw, entries] = await Promise.all([
+  const [allTeams, recRaw, entries] = await Promise.all([
+    authedFetch(`/teams`).then(r => r.json()),
     authedFetch(`/leagues/${LEAGUE}/recommendation?week=${WEEK}`).then(r => r.ok ? r.json() : null),
     authedFetch(`/leagues/${LEAGUE}/entries`).then(r => r.json()),
   ]);
@@ -69,7 +75,7 @@ async function load() {
         <td class="e">${label}</td>
         <td class="rec">${p.team}</td>
         <td>
-          <input type="text" class="pick" value="${currentPick}" maxlength="4">
+          <select class="pick">${pickOptions(allTeams, usedBefore, currentPick)}</select>
           ${usedBefore.length ? `<span class="used">used: ${usedBefore.join(", ")}</span>` : ""}
         </td>
         <td><label class="cf"><input type="checkbox" class="confirmed" ${currentConfirmed ? "checked" : ""}> on Splash</label></td>
@@ -89,11 +95,12 @@ async function load() {
     const status = tr.querySelector(".rowstatus");
     const original = pickInput.value;
 
-    pickInput.addEventListener("input", () => {
-      pickInput.classList.toggle("changed", pickInput.value.toUpperCase() !== original.toUpperCase());
+    pickInput.addEventListener("change", () => {
+      pickInput.classList.toggle("changed", pickInput.value !== original);
     });
 
     tr.querySelector(".rowsave").addEventListener("click", async () => {
+      if (!pickInput.value) { status.textContent = "Choose a team first."; status.className = "rowstatus err"; return; }
       status.textContent = "Saving…"; status.className = "rowstatus";
       try {
         const res = await authedFetch(`/leagues/${LEAGUE}/picks`, {
@@ -102,7 +109,7 @@ async function load() {
           body: JSON.stringify({
             entry_id: entryId,
             week: WEEK,
-            team: pickInput.value.toUpperCase(),
+            team: pickInput.value,
             confirmed: confirmedInput.checked,
           }),
         });

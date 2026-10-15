@@ -70,12 +70,41 @@ from survivor.simulation.field_simulator import FieldSimulation, team_eliminatio
 
 MAX_ENTRIES = 25  # this league's cap (Splash Sports, 2026 season) -- see module docstring
 
+# What greedy_local_allocation / greedy_local_entry_allocation can search
+# for. "expected_payout" (the default throughout this module, and the one
+# plan.md's objective section describes) is risk-neutral: it maximizes the
+# average total payout and has no preference between two entries sharing a
+# team versus spreading them, since expectation is linear regardless of
+# correlation. "win_probability" maximizes the fraction of simulated paths
+# on which *at least one* of your entries gets paid something -- a
+# genuinely different, risk-averse objective, since two entries on the same
+# team rise and fall together (correlated), so splitting them can raise
+# this probability even when it lowers the expected payout. Which one is
+# "better" isn't a statistical question the model settles on its own -- see
+# the gap each prints between them for your own entries before choosing.
+OBJECTIVES = {
+    "expected_payout": lambda payouts: float(payouts.mean()),
+    "win_probability": lambda payouts: float((payouts > 0).mean()),
+}
+
+
+def _objective_value(payouts: np.ndarray, objective: str) -> float:
+    if objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {objective!r}, expected one of {sorted(OBJECTIVES)}")
+    return OBJECTIVES[objective](payouts)
+
 
 @dataclass
 class AllocationResult:
     allocation: dict[str, int]
     mean_payout: float
     standard_error: float
+    # the fraction of simulated paths on which this allocation pays out
+    # anything at all (to any of your entries) -- always computed from the
+    # actual payouts regardless of which OBJECTIVES key a search used, so
+    # it's there for comparison even when mean_payout was what was searched
+    # for.
+    win_probability: float = 0.0
     # gap_to_best / gap_to_best_se are 0.0 for the best allocation itself,
     # and for any result not produced by a ranked comparison (e.g.
     # greedy_local_allocation, which searches for one allocation rather
@@ -348,6 +377,7 @@ def best_allocations(
                 allocation=allocation,
                 mean_payout=float(payouts.mean()),
                 standard_error=_standard_error(payouts, sim.n_paths),
+                win_probability=float((payouts > 0).mean()),
                 gap_to_best=gap_to_best,
                 gap_to_best_se=gap_to_best_se,
             )
@@ -361,13 +391,17 @@ def greedy_local_allocation(
     n_entries: int,
     used_teams_before: dict[str, set[str]] | None = None,
     elimination_weeks: dict[str, np.ndarray] | None = None,
+    objective: str = "expected_payout",
 ) -> AllocationResult:
     """Heuristic search for a single good allocation, for candidate lists too large to enumerate exhaustively.
 
-    Greedy construction (each entry goes wherever it adds the most expected
-    payout given entries already placed) followed by pairwise local search
-    (move one entry between two teams, keep it if it helps, repeat to a
-    local optimum). Not guaranteed globally optimal -- use best_allocations
+    Greedy construction (each entry goes wherever it adds the most to
+    `objective` given entries already placed) followed by pairwise local
+    search (move one entry between two teams, keep it if it helps, repeat
+    to a local optimum). `objective` is one of OBJECTIVES' keys -- see its
+    comment for what each one means; the result's own mean_payout and
+    win_probability are always both reported regardless of which one was
+    searched for. Not guaranteed globally optimal -- use best_allocations
     instead when the candidate list is small enough to enumerate exactly
     (see module docstring for the tradeoff).
     """
@@ -388,19 +422,19 @@ def greedy_local_allocation(
 
     contributions = {team: _Totals.of(sim, elimination_weeks[team]) for team in candidate_teams}
 
-    def mean_of(totals: _Totals) -> float:
-        return float(_payouts(sim, totals).mean())
+    def score_of(totals: _Totals) -> float:
+        return _objective_value(_payouts(sim, totals), objective)
 
     # running totals for `allocation`, updated by add/subtract per move
     # instead of rescoring every entry from scratch
     allocation: dict[str, int] = {}
     totals = _Totals.zero(sim)
     for _ in range(n_entries):
-        best_team = max(candidate_teams, key=lambda team: mean_of(totals + contributions[team]))
+        best_team = max(candidate_teams, key=lambda team: score_of(totals + contributions[team]))
         allocation[best_team] = allocation.get(best_team, 0) + 1
         totals = totals + contributions[best_team]
 
-    current_mean = mean_of(totals)
+    current_score = score_of(totals)
     improved = True
     while improved:
         improved = False
@@ -411,13 +445,13 @@ def greedy_local_allocation(
                 if allocation.get(from_team, 0) == 0:
                     break  # an earlier move already this pass moved from_team's last entry away
                 trial_totals = totals - contributions[from_team] + contributions[to_team]
-                trial_mean = mean_of(trial_totals)
-                if trial_mean > current_mean:
+                trial_score = score_of(trial_totals)
+                if trial_score > current_score:
                     allocation[from_team] -= 1
                     if allocation[from_team] == 0:
                         del allocation[from_team]
                     allocation[to_team] = allocation.get(to_team, 0) + 1
-                    totals, current_mean = trial_totals, trial_mean
+                    totals, current_score = trial_totals, trial_score
                     improved = True
 
     payouts = _payouts(sim, totals)
@@ -425,6 +459,7 @@ def greedy_local_allocation(
         allocation=allocation,
         mean_payout=float(payouts.mean()),
         standard_error=_standard_error(payouts, sim.n_paths),
+        win_probability=float((payouts > 0).mean()),
     )
 
 
@@ -433,6 +468,7 @@ def greedy_local_entry_allocation(
     used_teams_by_entry: dict[str, set[str]],
     candidate_teams: list[str],
     elimination_weeks: dict[tuple[frozenset, str], np.ndarray] | None = None,
+    objective: str = "expected_payout",
 ) -> dict[str, str]:
     """Heuristic per-entry team assignment for entries with diverged histories.
 
@@ -442,6 +478,16 @@ def greedy_local_entry_allocation(
     survivor.data.my_entries.used_teams_by_entry(alive_entries) once your
     entries have picked different teams in prior weeks and some may
     already be eliminated.
+
+    objective is one of OBJECTIVES' keys (see its comment): the default,
+    "expected_payout", is risk-neutral and will happily put two entries on
+    the same team whenever that's each one's own best move, since it
+    doesn't distinguish correlated risk from independent risk. Pass
+    "win_probability" to instead maximize the chance at least one entry
+    gets paid, which pushes entries apart from each other when stacking
+    would mean they rise and fall together -- score the result under both
+    (score_entries, then compare .mean() and (payouts > 0).mean()) to see
+    the actual size of that tradeoff for your own entries before choosing.
 
     elimination_weeks, if given, is used as the (used-teams signature, team)
     cache instead of a fresh one, and is mutated in place with whatever
@@ -493,8 +539,8 @@ def greedy_local_entry_allocation(
             contributions[key] = _Totals.of(sim, cache[key])
         return contributions[key]
 
-    def mean_of(totals: _Totals) -> float:
-        return float(_payouts(sim, totals).mean())
+    def score_of(totals: _Totals) -> float:
+        return _objective_value(_payouts(sim, totals), objective)
 
     contributions: dict[tuple[frozenset, str], _Totals] = {}
 
@@ -505,12 +551,12 @@ def greedy_local_entry_allocation(
     assignment: dict[str, str] = {}
     totals = _Totals.zero(sim)  # running totals for `assignment`, moved by add/subtract
     for entry_id in order:
-        best_team = max(eligible[entry_id], key=lambda team: mean_of(totals + contribution(entry_id, team)))
+        best_team = max(eligible[entry_id], key=lambda team: score_of(totals + contribution(entry_id, team)))
         assignment[entry_id] = best_team
         totals = totals + contribution(entry_id, best_team)
 
     entry_ids = list(used_teams_by_entry)
-    current_mean = mean_of(totals)
+    current_score = score_of(totals)
     improved = True
     while improved:
         improved = False
@@ -520,10 +566,10 @@ def greedy_local_entry_allocation(
                 if team == assignment[entry_id]:
                     continue
                 trial_totals = totals - contribution(entry_id, assignment[entry_id]) + contribution(entry_id, team)
-                trial_mean = mean_of(trial_totals)
-                if trial_mean > current_mean:
+                trial_score = score_of(trial_totals)
+                if trial_score > current_score:
                     assignment[entry_id] = team
-                    totals, current_mean = trial_totals, trial_mean
+                    totals, current_score = trial_totals, trial_score
                     improved = True
         # pairwise swaps: a move that only helps when two entries change
         # together (e.g. each is better off with the other's current team)
@@ -540,10 +586,10 @@ def greedy_local_entry_allocation(
                     + contribution(a, team_b)
                     + contribution(b, team_a)
                 )
-                trial_mean = mean_of(trial_totals)
-                if trial_mean > current_mean:
+                trial_score = score_of(trial_totals)
+                if trial_score > current_score:
                     assignment[a], assignment[b] = team_b, team_a
-                    totals, current_mean = trial_totals, trial_mean
+                    totals, current_score = trial_totals, trial_score
                     improved = True
 
     return assignment

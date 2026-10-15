@@ -59,7 +59,9 @@ async function load() {
 
   const cols = Object.entries(byTeam).map(([team, ids]) => {
     const own = ownByTeam[team];
-    const ownLine = own
+    const ownLine = own && own.available != null
+      ? `<div class="own">${Math.round(100 * own.available / own.n_alive)}% of live entries can still pick</div>`
+      : own
       ? `<div class="own">${own.pct != null ? own.pct + "%" : ""}${own.pct != null && own.pick_count != null ? " · " : ""}${own.pick_count != null ? own.pick_count + " picks" : ""} of the league</div>`
       : `<div class="own dim">league %: not pasted yet</div>`;
     return `
@@ -119,6 +121,8 @@ async function load() {
       <div class="eyebrow">Model's expected payout</div>
       <div class="big">${rec.expected_total_payout != null ? "$" + rec.expected_total_payout.toFixed(2) : "—"}</div>
       <div class="kv"><span>Standard error</span><b>${rec.payout_se != null ? "± $" + rec.payout_se.toFixed(2) : "—"}</b></div>
+      ${rec.win_probability != null ? `<div class="kv"><span>Chance of any payout</span><b>${(rec.win_probability * 100).toFixed(1)}%</b></div>` : ""}
+      ${rec.objective ? `<div class="kv"><span>Optimized for</span><b>${rec.objective === "win_probability" ? "chance of any payout" : "expected payout"}</b></div>` : ""}
       <div class="sub">${noRec ? "Shows once the weekly job has run." : "For the model's picks above, not necessarily the ones entered. Update the field size and pot under “This week's numbers” for a current estimate."}</div>
     </div>
     <details class="cmpbox">

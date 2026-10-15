@@ -88,6 +88,26 @@ def test_used_teams_by_entry_covers_each_requested_entry(picks_path):
     assert result == {"entry_1": {"BUF"}, "entry_2": {"KC"}, "entry_3": set()}
 
 
+def test_used_teams_before_week_excludes_that_week_own_pick(picks_path):
+    # re-deciding week 5 (e.g. a second run_weekly.py pass under a
+    # different --objective, or with refreshed odds, after an earlier
+    # --record already wrote a week-5 pick) must not treat that pick as a
+    # locked-in used team -- it's this week's own prior answer, not history
+    record_pick("entry_1", 4, "BUF", path=picks_path)
+    record_pick("entry_1", 5, "KC", path=picks_path)  # a prior run's week-5 recommendation, not yet "locked"
+    assert used_teams("entry_1", before_week=5, path=picks_path) == {"BUF"}
+    assert used_teams("entry_1", before_week=6, path=picks_path) == {"BUF", "KC"}
+    assert used_teams("entry_1", path=picks_path) == {"BUF", "KC"}  # unchanged default: no filter
+
+
+def test_used_teams_by_entry_before_week_excludes_that_week_own_pick(picks_path):
+    record_pick("entry_1", 4, "BUF", path=picks_path)
+    record_pick("entry_1", 5, "KC", path=picks_path)
+    record_pick("entry_2", 4, "DAL", path=picks_path)
+    result = used_teams_by_entry(["entry_1", "entry_2"], before_week=5, path=picks_path)
+    assert result == {"entry_1": {"BUF"}, "entry_2": {"DAL"}}
+
+
 def test_record_allocation_assigns_and_records_every_entry(picks_path):
     allocation = {"BUF": 2, "KC": 1}
     assignment = record_allocation(allocation, week=4, entry_ids=["e1", "e2", "e3"], path=picks_path)

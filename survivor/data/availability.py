@@ -19,7 +19,7 @@ from pathlib import Path
 
 from survivor.data.team_keys import ABBREVIATION_TO_FULL_NAME, to_abbreviation
 
-_ROW_TAIL = re.compile(r"([\d,]+)\s*/\s*([\d,]+)\s+\d+%\s*$")
+_ROW_TAIL = re.compile(r"([\d,]+)\s*/\s*([\d,]+)\s*\(?\s*\d+%\s*\)?\s*$")  # "1,123 / 2,463  46%" or "387/610 (63%)"
 _RANK_PREFIX = re.compile(r"^\d+(?:[–—-]\d+)?\s+")  # "1 ", "22-32 ", or a range whose dash was dropped ("2232 ")
 _NICKNAME_TO_ABBREVIATION = {full.split()[-1]: abbr for abbr, full in ABBREVIATION_TO_FULL_NAME.items()}
 
@@ -31,12 +31,14 @@ def _team_abbreviation(name: str) -> str:
     return to_abbreviation(name)  # full names and abbreviations
 
 
-def parse_availability(text: str) -> tuple[int, dict[str, int]]:
+def parse_availability(text: str, allow_missing: bool = False) -> tuple[int, dict[str, int]]:
     """(live entries, {team abbreviation: entries that can still pick it}) from a pasted availability table.
 
     Raises if the rows disagree on the live-entry count, name a team more
     than once, or don't cover all 32 teams -- a truncated paste would
-    otherwise read as "nobody has used the missing teams".
+    otherwise read as "nobody has used the missing teams". Pass
+    allow_missing=True for a source that deliberately lists only some teams
+    (the rest are nearly unused); then call fill_missing_teams.
     """
     available: dict[str, int] = {}
     totals: set[int] = set()
@@ -47,7 +49,7 @@ def parse_availability(text: str) -> tuple[int, dict[str, int]]:
             continue
         totals.add(int(tail.group(2).replace(",", "")))
         count = int(tail.group(1).replace(",", ""))
-        names = _RANK_PREFIX.sub("", line[: tail.start()].strip())
+        names = _RANK_PREFIX.sub("", line[: tail.start()].strip()).rstrip(":").strip()
         for name in names.split(","):
             try:
                 team = _team_abbreviation(name)
@@ -62,10 +64,35 @@ def parse_availability(text: str) -> tuple[int, dict[str, int]]:
     if len(totals) != 1:
         raise ValueError(f"rows disagree on the number of live entries: {sorted(totals)}")
     missing = sorted(set(ABBREVIATION_TO_FULL_NAME) - set(available))
-    if missing:
+    if missing and not allow_missing:
         raise ValueError(f"availability table is missing teams: {missing}")
     return totals.pop(), available
 
 
-def load_availability(path: str | Path) -> tuple[int, dict[str, int]]:
-    return parse_availability(Path(path).read_text(encoding="utf-8"))
+def fill_missing_teams(n_alive: int, picks_made: int, available: dict[str, int]) -> dict[str, int]:
+    """Complete a table that lists only some teams.
+
+    Teams a source leaves out are its least-used ones, but not necessarily
+    unused: the listed rows may sum to fewer than picks_made * n_alive
+    used slots. That shortfall is spread as evenly as possible over the
+    unlisted teams (each live entry has made exactly picks_made picks, so
+    the used counts must add up). Raises if the listed teams already use
+    more than that total.
+    """
+    missing = sorted(set(ABBREVIATION_TO_FULL_NAME) - set(available))
+    filled = dict(available)
+    if not missing:
+        return filled
+    deficit = picks_made * n_alive - sum(n_alive - count for count in available.values())
+    if deficit < 0:
+        raise ValueError(f"listed teams already account for {-deficit} more used slots than {n_alive} entries x {picks_made} picks")
+    if deficit > len(missing) * n_alive:
+        raise ValueError(f"{deficit} used slots can't fit in the {len(missing)} unlisted teams")
+    base, extra = divmod(deficit, len(missing))
+    for i, team in enumerate(missing):
+        filled[team] = n_alive - (base + (1 if i < extra else 0))
+    return filled
+
+
+def load_availability(path: str | Path, allow_missing: bool = False) -> tuple[int, dict[str, int]]:
+    return parse_availability(Path(path).read_text(encoding="utf-8"), allow_missing=allow_missing)

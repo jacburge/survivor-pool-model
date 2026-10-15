@@ -96,3 +96,61 @@ def test_inconsistent_live_entry_counts_are_rejected():
 def test_no_rows_is_rejected():
     with pytest.raises(ValueError, match="no availability rows"):
         parse_availability("just some text")
+
+
+# Brent's report format: "Team: available/live (pct%)", listing only the 19 least-open teams
+BRENT_TABLE = """
+Vikings: 387/610 (63%)
+Bengals: 407/610 (67%)
+Ravens: 419/610 (69%)
+Texans: 455/610 (75%)
+Jaguars: 502/610 (82%)
+Seahawks: 534/610 (88%)
+Lions: 553/610 (91%)
+Bears: 572/610 (94%)
+Patriots: 580/610 (95%)
+Chiefs: 582/610 (95%)
+Packers: 588/610 (96%)
+Broncos: 593/610 (97%)
+Steelers: 594/610 (97%)
+Colts: 594/610 (97%)
+49ers: 596/610 (98%)
+Rams: 601/610 (99%)
+Jets: 604/610 (99%)
+Giants: 606/610 (99%)
+Cowboys: 608/610 (100%)
+"""
+
+
+def test_parses_the_colon_and_parenthesis_report_format():
+    n_alive, available = parse_availability(BRENT_TABLE, allow_missing=True)
+
+    assert n_alive == 610
+    assert len(available) == 19
+    assert available["MIN"] == 387 and available["DAL"] == 608
+
+
+def test_partial_table_is_rejected_unless_allowed():
+    with pytest.raises(ValueError, match="missing teams"):
+        parse_availability(BRENT_TABLE)
+
+
+def test_fill_missing_teams_spreads_the_used_shortfall_over_unlisted_teams():
+    from survivor.data.availability import fill_missing_teams
+
+    n_alive, available = parse_availability(BRENT_TABLE, allow_missing=True)
+    filled = fill_missing_teams(n_alive, picks_made=2, available=available)
+
+    assert len(filled) == 32
+    assert sum(n_alive - c for c in filled.values()) == 2 * n_alive
+    RivalFieldState.from_availability(n_alive, picks_made=2, available=filled)
+    unlisted = set(filled) - set(available)
+    assert all(n_alive - 1 <= filled[t] <= n_alive for t in unlisted)
+
+
+def test_fill_missing_teams_rejects_an_overfull_table():
+    from survivor.data.availability import fill_missing_teams
+
+    n_alive, available = parse_availability(BRENT_TABLE, allow_missing=True)
+    with pytest.raises(ValueError):
+        fill_missing_teams(n_alive, picks_made=1, available=available)

@@ -65,10 +65,23 @@ def record_result(entry_id: str, week: int, survived: bool, path: Path = PICKS_F
     picks.to_csv(path, index=False)
 
 
-def used_teams(entry_id: str, path: Path = PICKS_FILE) -> set[str]:
-    """Every team this entry has ever picked, regardless of outcome (a losing pick still used the team)."""
+def used_teams(entry_id: str, before_week: int | None = None, path: Path = PICKS_FILE) -> set[str]:
+    """Every team this entry has picked in a prior week, regardless of outcome (a losing pick still used the team).
+
+    Pass before_week (the week currently being decided) to exclude that
+    week's own pick from the result. Without it, a pick already recorded
+    for the week you're about to re-decide -- e.g. re-running run_weekly.py
+    for the same week under a different --objective, or with refreshed
+    odds, after an earlier --record -- would wrongly count as "already
+    used" and block the search from choosing that team again, when really
+    it's just this week's own prior answer being reconsidered, not a locked
+    result from the past.
+    """
     picks = _load(path)
-    return set(picks[picks["entry_id"] == entry_id]["team"])
+    entry_picks = picks[picks["entry_id"] == entry_id]
+    if before_week is not None:
+        entry_picks = entry_picks[entry_picks["week"] < before_week]
+    return set(entry_picks["team"])
 
 
 def is_alive(entry_id: str, path: Path = PICKS_FILE) -> bool:
@@ -86,9 +99,15 @@ def alive_entries(entry_ids: list[str], path: Path = PICKS_FILE) -> list[str]:
     return [entry_id for entry_id in entry_ids if is_alive(entry_id, path)]
 
 
-def used_teams_by_entry(entry_ids: list[str], path: Path = PICKS_FILE) -> dict[str, set[str]]:
-    """{entry_id: used teams} for each of entry_ids -- the per-entry history an allocation search needs."""
-    return {entry_id: used_teams(entry_id, path) for entry_id in entry_ids}
+def used_teams_by_entry(
+    entry_ids: list[str], before_week: int | None = None, path: Path = PICKS_FILE
+) -> dict[str, set[str]]:
+    """{entry_id: used teams} for each of entry_ids -- the per-entry history an allocation search needs.
+
+    Pass before_week -- see used_teams's docstring for why a caller
+    re-deciding a given week should always pass that week here.
+    """
+    return {entry_id: used_teams(entry_id, before_week=before_week, path=path) for entry_id in entry_ids}
 
 
 def record_allocation(

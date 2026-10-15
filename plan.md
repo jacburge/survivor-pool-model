@@ -1,12 +1,15 @@
 # NFL Survivor Pool Model: Planning Document
 
-*Sep 24, 2026 · @Megan*
+*Sep 24, 2026 · @Megan · refreshed Oct 12, 2026*
 
-## Progress as of September 25, 2026
+## Progress as of October 12, 2026
 
-Phases 0 through 5 are done, all in one day and well ahead of the Sep 25-Oct 2
-schedule below. See [README.md](README.md) for how to run things and the one
-open validation gap. Status by phase:
+Phases 0 through 6 are done, and Phase 7's pipeline piece and a first
+version of Phase 9 are live (Week 5 picks were entered; the weekly job now
+runs on Render). Phases 0 through 5 were finished in one day, well ahead of
+the Sep 25-Oct 2 schedule below. See [README.md](README.md) for how to run
+things and the one open validation gap. Status by phase (the Phase 0-5
+entries below were written Sep 25; later additions are noted in place):
 
 - **Phase 0 (Rules and data access):**
   confirmed - every downstream phase proceeded
@@ -128,6 +131,17 @@ open validation gap. Status by phase:
   stuck in a local optimum (96.86 vs. the true 97.55) whenever reaching the
   best assignment required two entries trading teams simultaneously —
   fixed by adding a pairwise-swap move alongside the single-entry one.
+
+  Added an `objective` option to both greedy searches (`OBJECTIVES` in
+  `portfolio.py`): `expected_payout` (risk-neutral, the original behavior)
+  or `win_probability` (chance at least one entry is paid), now the default
+  in `run_weekly.py`. Two entries on one team rise and fall together, so
+  the second objective spreads them apart, usually at some expected-payout
+  cost; each run prints both objectives' numbers on the same simulated
+  paths so that cost is visible rather than assumed. `AllocationResult`
+  also carries `win_probability`. Separately, `my_entries.used_teams` takes
+  `before_week` so re-running a week after `--record` doesn't count that
+  week's own pick as already used.
 - **Phase 7 (Lock day):** the "weekly pick sheet" piece exists
   (`scripts/run_weekly.py`: refresh real data, fit current ratings, run the
   simulator, recommend a per-entry allocation via
@@ -144,27 +158,51 @@ open validation gap. Status by phase:
   `greedy_local_allocation` would have, with no extra runtime — confirmed
   directly, not just argued, before treating it as safe to wire in
   unconditionally rather than branching on whether history exists.
-  Scheduled for October 1 (Thursday option only) and October 4.
+  Update (Oct 12): `run_weekly.py` also writes
+  `data_store/pick_sheets/latest_summary.json` (week, objective, expected
+  payout, SE, win probability) and the hosted weekly job
+  (`scripts/run_weekly_and_ingest.py`, Wednesday noon ET) ingests that file
+  rather than parsing printed output, refusing a summary for the wrong
+  week. Marking wins and losses is now a page in the hosted app (Results)
+  rather than a hand-run function, though it is still a manual step with no
+  automated results feed. Scheduled for October 1 (Thursday option only)
+  and October 4.
 - **Phase 8 (In-season additions):** only the rival tracker's storage layer
   is built ahead of need (`survivor/data/rival_tracker.py`: record/read
   revealed picks, used-team sets, per-week pick distributions). It has no
   real data yet since Week 4 hasn't happened. Popularity refinement from the
   tracked field, split-decision logic, and the exact endgame dynamic
   program are all not started.
-- **Phase 9 (Hosted multi-user version):** planned, not yet built — see
+- **Phase 9 (Hosted multi-user version):** first version built and
+  deployed on Render (blueprint in `render.yaml`): Postgres, a FastAPI
+  service in `api/`, static pages in `web/` (Board, Picks, Ownership,
+  Results, This week's numbers, Guide), and a weekly cron job. It serves
+  one league behind a single shared password; the user and league
+  membership tables exist but per-user accounts and per-league rule
+  separation are not built, so the "Done when" below is not met yet. The
+  Picks page offers each entry only teams it hasn't used, and the server
+  enforces that. Known open items: the auth settings fall back to
+  development defaults if `APP_PASSWORD`/`SECRET_KEY` aren't set,
+  there's no login rate limiting, the Picks dropdown doesn't know which
+  teams are on a bye, and the API has little automated test coverage. See
   below.
 
 ## Goal
 
 Build a decision pipeline that maximizes expected total payout across 10
-entries in the traino Splash Sports survivor pool, and have it producing a
-Week 4 recommendation before the Sunday, October 4, 1:00 PM Eastern lock.
+entries in the traino Splash Sports survivor pool. The original target, a
+Week 4 recommendation before the Sunday, October 4, 1:00 PM Eastern lock,
+was met; the goal now is a recommendation each week through Week 18,
+produced by the weekly job and reviewed before each lock.
 
 ### Planning assumptions
 
 - **Field:** 500 entries at $20, 10% rake, pot of about $9,000. About 200
-  entries were already in by September 25. Actual size is unknown until
-  October 4, so every model run sweeps a range of field sizes.
+  entries were already in by September 25. Actual size was unknown until
+  the Week 4 lock, so early runs swept a range of field sizes; now the real
+  count is entered by hand in the hosted app (`n_rivals`, under "This
+  week's numbers") and passed to each run, or, from Week 5, derived from
+  the pool's per-team availability table (`--rival-availability`).
 - **Horizon:** Weeks 4 through 18, which is 15 picks from 32 teams.
   Survivors after Week 18 split the pot, as do entries eliminated together
   in the same week.
@@ -175,7 +213,10 @@ Week 4 recommendation before the Sunday, October 4, 1:00 PM Eastern lock.
   are revealed to all entrants at Thursday kickoff, and the Thursday result
   is known before the Sunday lock.
 - **Objective:** expected payout, not survival probability. These differ
-  because payout depends on how many rivals survive with you.
+  because payout depends on how many rivals survive with you. As built,
+  `run_weekly.py` can search either expected payout or the chance that at
+  least one entry is paid (`--objective`, the latter now the default);
+  see Phase 6 and the Payout objective note.
 
 ## Method overview
 
@@ -196,16 +237,22 @@ Four layers, each feeding the next:
    about 13 to 14 points.
 2. **Field layer.** A pick popularity model predicts which teams rival
    entries choose, conditioned on each rival's remaining teams. Week 4 uses
-   public national pick data. From Week 4 Thursday onward, each of the
-   roughly 500 rival entries is tracked individually from revealed picks,
-   updated twice a week: after Thursday kickoff and after the Sunday lock.
+   public national pick data. The plan was to track each of the roughly 500
+   rivals individually from revealed picks, twice a week. As built, the
+   default is a "ghost" rival-field estimator whose cost doesn't depend on
+   field size, started from the pool's real per-team availability table
+   from Week 5; the per-rival tracker exists only as a storage layer
+   (`rival_tracker.py`) with no real data fed in yet.
 3. **Decision layer.** Candidate picks are scored by expected payout using
    rollout: simulate the rest of the season with a base policy for your own
    future picks, such as the maximum-survival team assignment over
    remaining weeks.
 4. **Portfolio layer.** The 10 entries are optimized jointly, since 10
-   entries on one team is one bet at 10 times the stake. The top 5 or so
-   candidate teams are enumerated across entry allocations each week.
+   entries on one team is one bet at 10 times the stake. Planned: enumerate
+   the top 5 or so candidate teams across entry allocations each week. As
+   built: a greedy-plus-local-search allocation over every team playing
+   that week, because Phase 6's real-data check showed restricting to the
+   survival-probability top 5 left real expected payout on the table.
 
 Two modeling rules matter most:
 
@@ -215,13 +262,14 @@ Two modeling rules matter most:
   for later. Independent per-game sampling understates it.
 - **Exact endgame.** Once roughly 10 or fewer entries remain, switch from
   simulation to exact dynamic programming over the joint state of all
-  survivors' remaining teams.
+  survivors' remaining teams. (Not built yet.)
 
 ## Infrastructure and pipeline overview
 
 The pipeline runs once per week, with a final refresh as close to each lock
 as possible. Data flows from three sources through the four layers to a
-weekly pick sheet for 10 entries.
+weekly pick sheet for 10 entries. Since mid-October the pick sheet is also
+loaded into a hosted app (see Phase 9 and the table below).
 
 ```mermaid
 flowchart LR
@@ -233,7 +281,9 @@ flowchart LR
   F --> G
   G --> H["Rollout scoring<br/>expected payout"]
   H --> I["Portfolio allocation<br/>10 entries"]
-  I --> J["Weekly pick sheet"]
+  I --> J["Weekly pick sheet<br/>+ run summary"]
+  J --> K["Hosted app<br/>Postgres, API, web pages"]
+  K -.->|saved picks, results| I
   J -.->|revealed picks| F
 ```
 
@@ -251,14 +301,19 @@ for the Sunday decision and once after the Sunday lock for the next week.
 | Popularity model | Public pick percentages, revealed Splash picks | Pick distribution per rival state |
 | Rival tracker | Revealed Splash picks | Used-team set per rival entry |
 | Field simulator | All of the above | Simulated season outcomes and payouts |
-| Decision and portfolio layers | Simulator output | Recommended pick per entry, with expected payout |
+| Decision and portfolio layers | Simulator output | Recommended pick per entry, with expected payout and win probability |
+| Run summary | The weekly run | `latest_summary.json`: week, objective, expected payout, SE, win probability |
+| Hosted app (Phase 9) | Pick sheet, run summary, entered picks and results | Board, Picks, Ownership, Results and config pages over Postgres |
 
 ## Plan phases
 
-Phases 0 through 7 must finish before the October 4 lock. Phase 8 is built
-during the season, when each piece is first needed. Phase 9 runs in
-parallel, on its own timeline. Phase 3 includes a September 29 checkpoint
-because a Thursday Week 4 pick would pull the deadline forward to October 1.
+As originally scheduled, Phases 0 through 7 had to finish before the
+October 4 lock, Phase 8 was to be built during the season when each piece
+is first needed, and Phase 9 ran in parallel on its own timeline. Phase 3
+included a September 29 checkpoint because a Thursday Week 4 pick would
+pull the deadline forward to October 1. The dates in the phase sections
+below are that original schedule; the Progress section at the top has the
+current status.
 
 ### Phase 0: Rules and data access
 
@@ -381,6 +436,9 @@ because a Thursday Week 4 pick would pull the deadline forward to October 1.
 - **Done when:** the top allocation is the same across 5 random seeds and
   survives a 2 percentage point shift in the leading team's win
   probability, or the result is flagged as a near tie.
+- **As built:** the all-candidate greedy search (see Progress) replaced
+  top-5 enumeration as the default, and the search can optimize either
+  expected payout or win probability.
 
 > **League configuration (future).** This build hardcodes the current
 > league's rules directly: a 25-entry cap
@@ -406,6 +464,10 @@ because a Thursday Week 4 pick would pull the deadline forward to October 1.
   October 4, before 1:00 PM Eastern.
 - **Done when:** all entries are submitted and the run's inputs and outputs
   are archived for later review.
+- **As built:** the weekly pick sheet and archive exist; the staging,
+  cutoff awareness and submission automation do not. Submission is by hand
+  on Splash, tracked with the Picks page's "on Splash" checkbox. The same
+  recommendation now repeats every week, not only for Week 4.
 
 ### Phase 8: In-season additions
 
@@ -445,10 +507,11 @@ through it.
   constant. What's missing is a place for multiple people's league rules
   and entries to live, and a way to reach the tool without a terminal and a
   personal `data_store` folder.
-- **When:** targeting live for Week 4 or shortly after, in parallel with —
-  not blocking — Phase 7's October 4 lock-day submission for your own 10
-  entries, which ships through the existing scripts regardless of how this
-  phase is going.
+- **When:** targeted live for Week 4 or shortly after, in parallel with —
+  not blocking — Phase 7's October 4 lock-day submission, which ships
+  through the existing scripts regardless of how this phase is going. A
+  first single-league version went live in Weeks 4–5; the multi-user part
+  is still open.
 - **Done when:** at least one other person can log in, configure their own
   league's rules, and see that league's weekly recommended allocation
   without touching the command line or your `data_store` folder.
@@ -519,6 +582,15 @@ $$V_i = \mathbb{E}\left[\frac{\text{Pot} \cdot \mathbf{1}\{i \in W\}}{|W|}\right
 eliminated together in the final week that empties the field, or Week 18
 survivors. Portfolio value is the sum of `V` over your entries on the same
 paths.
+
+The default search in `run_weekly.py` instead maximizes the share of
+simulated paths where at least one of your entries is paid
+(`win_probability`), because two entries on one team are correlated and the
+goal for this portfolio is to limit the chance of losing several entries to
+one bad week. This is a risk-averse choice, not a statistical one: it
+usually costs some expected payout, and each run prints both numbers on the
+same paths so the cost is visible. `--objective expected_payout` restores
+the objective above.
 
 ### Pick popularity
 

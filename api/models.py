@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, create_engine
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, create_engine, inspect, text
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -140,6 +140,8 @@ class Recommendation(Base):
     used_teams_before = Column(String, default="")  # comma-joined, as her CSV writes it
     expected_total_payout = Column(Float, nullable=True)  # same for every row in one run
     payout_se = Column(Float, nullable=True)
+    objective = Column(String, nullable=True)  # 'win_probability' or 'expected_payout' -- what the search maximized
+    win_probability = Column(Float, nullable=True)  # chance at least one entry is paid, on the same simulated paths
     generated_at = Column(DateTime, default=now)
     __table_args__ = (UniqueConstraint("league_id", "week", "entry_id", name="one_recommendation_per_entry_per_week"),)
 
@@ -158,9 +160,26 @@ class Ownership(Base):
     team = Column(String, nullable=False)
     pick_count = Column(Integer, nullable=True)   # raw count, when Splash gives one
     pct = Column(Float, nullable=True)             # percentage, when that's what's pasted
+    available = Column(Integer, nullable=True)     # availability report: live entries that can still pick this team
+    n_alive = Column(Integer, nullable=True)       # availability report: live entries in the pool (its denominator)
     updated_at = Column(DateTime, default=now, onupdate=now)
     __table_args__ = (UniqueConstraint("league_id", "week", "team", name="one_ownership_row_per_team_per_week"),)
 
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """create_all makes new tables but never alters existing ones, so a column added to a model
+    after first deploy has to be added by hand. Nullable columns only -- ADD COLUMN is portable
+    across SQLite and Postgres that way."""
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name not in existing and column.nullable:
+                    ddl_type = column.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {column.name} {ddl_type}'))

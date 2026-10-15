@@ -27,6 +27,20 @@ simulated paths so the comparison is paired, not independent -- the
 all-candidate search meaningfully beat that restricted one on real Week 3
 and Week 4, 2026 data (plan.md's Phase 6 section has the numbers).
 
+--objective picks what that search maximizes (survivor.decision.portfolio.
+OBJECTIVES): the default, win_probability, maximizes the chance at least
+one entry gets paid, spreading entries apart whenever stacking them would
+be correlated (both rise and fall together), typically for some
+expected-payout cost -- made the default from Week 6 on, since minimizing
+the chance of losing several entries to one bad week, not maximizing the
+average payout, is the goal for this portfolio. Pass --objective
+expected_payout instead for the risk-neutral search, which
+will put two entries on the same team whenever that's each one's own best
+move, since it doesn't distinguish correlated risk from independent risk.
+Whichever one is passed, the other's expected payout and win probability
+are also printed on the same simulated paths, so the size of that tradeoff
+for your actual entries this week is something to look at, not assume.
+
 Entry tracking (survivor.data.my_entries): entries are named entry_1..
 entry_N (N = --n-entries) and their history is read from
 data_store/my_entries/. Nothing recorded yet (true before Week 4) means
@@ -84,17 +98,18 @@ Run: .venv/bin/python scripts/run_weekly.py --week 4
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 from survivor.data import my_entries, schedule_client
-from survivor.data.availability import load_availability
+from survivor.data.availability import fill_missing_teams, load_availability
 from survivor.data.odds_client import OddsAPIClient, parse_odds_events
 from survivor.data.storage import DEFAULT_STORE_ROOT, save_raw_pull
 from survivor.data.survivorgrid_client import fetch_season_to_date_games
-from survivor.decision.portfolio import greedy_local_entry_allocation, score_entries
+from survivor.decision.portfolio import OBJECTIVES, greedy_local_entry_allocation, score_entries
 from survivor.probability.current_week import compute_current_week_probabilities, compute_current_week_spreads
 from survivor.probability.ratings import DEFAULT_SEASON_TO_DATE_RIDGE, fit_team_ratings
 from survivor.simulation.field_simulator import simulate_rival_field
@@ -146,6 +161,13 @@ def main() -> None:
                               "pick each team), pasted from Splash; sets the rival field's real size and used-team "
                               "rates for any --week after the league's first. Omit for a fresh league.")
     parser.add_argument("--n-paths", type=int, default=20000, help="see docstring for the runtime-vs-precision tradeoff")
+    parser.add_argument("--objective", choices=sorted(OBJECTIVES), default="win_probability",
+                         help="what the recommendation search optimizes (survivor.decision.portfolio.OBJECTIVES): "
+                              "'win_probability' (default -- maximizes the chance at least one entry gets paid, by "
+                              "spreading correlated risk across entries, typically at some expected-payout cost) or "
+                              "'expected_payout' (risk-neutral -- maximizes average total payout, happy to put two "
+                              "entries on the same team when that's each one's own best move -- the other "
+                              "objective's numbers are always printed alongside the chosen one for comparison)")
     parser.add_argument("--pot", type=float, default=9000.0)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--skip-odds-refresh", action="store_true",
@@ -206,7 +228,8 @@ def main() -> None:
         if picks_made < 1:
             raise SystemExit(f"--rival-availability needs --week after the league's first (week {LEAGUE_START_WEEK}): "
                              "in the first week every rival has every team available.")
-        n_alive, available = load_availability(args.rival_availability)
+        n_alive, available = load_availability(args.rival_availability, allow_missing=True)
+        available = fill_missing_teams(n_alive, picks_made, available)
         rival_state = RivalFieldState.from_availability(n_alive, picks_made, available)  # checks the table adds up
         print(f"\nRival field from availability table: {n_alive} live entries, {picks_made} picks each.")
     else:
@@ -232,7 +255,7 @@ def main() -> None:
     if len(alive_ids) < len(entry_ids):
         print(f"\n{len(entry_ids) - len(alive_ids)} of {len(entry_ids)} entries already eliminated: "
               f"{sorted(set(entry_ids) - set(alive_ids))}")
-    used_teams_by_entry = my_entries.used_teams_by_entry(alive_ids)
+    used_teams_by_entry = my_entries.used_teams_by_entry(alive_ids, before_week=args.week)
 
     all_teams_playing = sorted(set(week_games["home_team"]) | set(week_games["away_team"]))
     print(f"\nRecommending picks for {len(alive_ids)} alive entries across all "
@@ -250,31 +273,48 @@ def main() -> None:
             for entry_id, team in assignment.items()
         }
 
+    def payout_summary(payouts: np.ndarray) -> str:
+        se = payouts.std(ddof=1) / np.sqrt(args.n_paths)
+        return f"{payouts.mean():.2f} (SE {se:.2f}), {(payouts > 0).mean():.1%} chance of any payout"
+
     recommendation = greedy_local_entry_allocation(
-        sim, used_teams_by_entry, all_teams_playing, elimination_weeks=elimination_cache
+        sim, used_teams_by_entry, all_teams_playing, elimination_weeks=elimination_cache, objective=args.objective
     )
 
     team_counts: dict[str, int] = {}
     for team in recommendation.values():
         team_counts[team] = team_counts.get(team, 0) + 1
     recommendation_payout = score_entries(sim, cached_arrays(recommendation))
-    print(f"\nRecommended allocation ({team_counts}):")
+    print(f"\nRecommended allocation, optimizing for '{args.objective}' ({team_counts}):")
     for entry_id, team in sorted(recommendation.items()):
         history = used_teams_by_entry[entry_id]
         print(f"  {entry_id} -> {team}" + (f"  (already used: {sorted(history)})" if history else ""))
-    print(f"  Expected total payout: {recommendation_payout.mean():.2f} "
-          f"(SE {recommendation_payout.std(ddof=1) / np.sqrt(args.n_paths):.2f})")
+    print(f"  Expected total payout: {payout_summary(recommendation_payout)}")
+
+    if len(used_teams_by_entry) > 1:
+        # with a single entry, correlated-risk-across-entries is moot --
+        # both objectives agree -- so only worth showing once there's
+        # actually a tradeoff to see
+        alt_objective = next(o for o in OBJECTIVES if o != args.objective)
+        alt_recommendation = greedy_local_entry_allocation(
+            sim, used_teams_by_entry, all_teams_playing, elimination_weeks=elimination_cache, objective=alt_objective
+        )
+        alt_counts: dict[str, int] = {}
+        for team in alt_recommendation.values():
+            alt_counts[team] = alt_counts.get(team, 0) + 1
+        alt_payout = score_entries(sim, cached_arrays(alt_recommendation))
+        print(f"\nFor comparison, optimizing for '{alt_objective}' instead would give ({alt_counts}):")
+        print(f"  Expected total payout: {payout_summary(alt_payout)}")
 
     top_candidates = sorted(current_week_survival, key=current_week_survival.get, reverse=True)[:TOP_N_FOR_SANITY_CHECK]
     top_candidates = [t for t in top_candidates if t in all_teams_playing]
     sanity_check = greedy_local_entry_allocation(
-        sim, used_teams_by_entry, top_candidates, elimination_weeks=elimination_cache
+        sim, used_teams_by_entry, top_candidates, elimination_weeks=elimination_cache, objective=args.objective
     )
     sanity_payout = score_entries(sim, cached_arrays(sanity_check))
-    print(f"\nSanity check -- same search, restricted to the top {len(top_candidates)} candidates by survival "
-          f"probability ({top_candidates}):")
-    print(f"  Expected total payout: {sanity_payout.mean():.2f} "
-          f"(SE {sanity_payout.std(ddof=1) / np.sqrt(args.n_paths):.2f})")
+    print(f"\nSanity check -- same search and objective, restricted to the top {len(top_candidates)} candidates by "
+          f"survival probability ({top_candidates}):")
+    print(f"  Expected total payout: {payout_summary(sanity_payout)}")
 
     diff = recommendation_payout - sanity_payout
     gap, gap_se = float(diff.mean()), float(diff.std(ddof=1) / np.sqrt(args.n_paths))
@@ -293,6 +333,18 @@ def main() -> None:
     sheet.to_csv(out_dir / f"{args.year}_week{args.week}_{timestamp}.csv", index=False)
     sheet.to_csv(out_dir / "latest.csv", index=False)
     print(f"\nSaved pick sheet to {out_dir / f'{args.year}_week{args.week}_{timestamp}.csv'}")
+
+    # Machine-readable summary for run_weekly_and_ingest.py -- read this, don't scrape stdout.
+    summary = {
+        "year": args.year,
+        "week": args.week,
+        "objective": args.objective,
+        "n_paths": args.n_paths,
+        "expected_total_payout": float(recommendation_payout.mean()),
+        "payout_se": float(recommendation_payout.std(ddof=1) / np.sqrt(args.n_paths)),
+        "win_probability": float((recommendation_payout > 0).mean()),
+    }
+    (out_dir / "latest_summary.json").write_text(json.dumps(summary, indent=2))
 
     if args.record:
         for entry_id, team in recommendation.items():
