@@ -105,7 +105,7 @@ import numpy as np
 import pandas as pd
 
 from survivor.data import my_entries, schedule_client
-from survivor.data.availability import load_availability
+from survivor.data.availability import fill_missing_teams, load_availability
 from survivor.data.odds_client import OddsAPIClient, parse_odds_events
 from survivor.data.storage import DEFAULT_STORE_ROOT, save_raw_pull
 from survivor.data.survivorgrid_client import fetch_season_to_date_games
@@ -228,7 +228,8 @@ def main() -> None:
         if picks_made < 1:
             raise SystemExit(f"--rival-availability needs --week after the league's first (week {LEAGUE_START_WEEK}): "
                              "in the first week every rival has every team available.")
-        n_alive, available = load_availability(args.rival_availability)
+        n_alive, available = load_availability(args.rival_availability, allow_missing=True)
+        available = fill_missing_teams(n_alive, picks_made, available)
         rival_state = RivalFieldState.from_availability(n_alive, picks_made, available)  # checks the table adds up
         print(f"\nRival field from availability table: {n_alive} live entries, {picks_made} picks each.")
     else:

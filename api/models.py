@@ -160,6 +160,8 @@ class Ownership(Base):
     team = Column(String, nullable=False)
     pick_count = Column(Integer, nullable=True)   # raw count, when Splash gives one
     pct = Column(Float, nullable=True)             # percentage, when that's what's pasted
+    available = Column(Integer, nullable=True)     # availability report: live entries that can still pick this team
+    n_alive = Column(Integer, nullable=True)       # availability report: live entries in the pool (its denominator)
     updated_at = Column(DateTime, default=now, onupdate=now)
     __table_args__ = (UniqueConstraint("league_id", "week", "team", name="one_ownership_row_per_team_per_week"),)
 

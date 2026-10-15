@@ -23,15 +23,16 @@
       <a class="navbtn" href="guide.html">Guide</a>
     </nav>
     <h1>League ownership — Week <span id="wk"></span></h1>
-    <p class="sub">Paste from Splash's Stats tab — team name, then percentage and/or count, one per line.
-      Handles "Chiefs 39% 948", "KC 948", or just "Chiefs 39%" — whatever's actually on the screen.</p>
+    <p class="sub">Paste the availability report from Splash — how many live entries can still pick each team, one team per line,
+      like "Vikings: 387/610 (63%)". Teams the report leaves out are treated as barely used. The weekly job feeds this to the
+      model as the real state of the rival field. Pick-share lines like "Chiefs 39% 948" are still accepted for display.</p>
     <label for="raw">Paste here</label>
-    <textarea id="raw" placeholder="Chiefs 39% 948&#10;Seahawks 14% 343&#10;Lions 10% 252"></textarea>
+    <textarea id="raw" placeholder="Vikings: 387/610 (63%)&#10;Bengals: 407/610 (67%)&#10;Ravens: 419/610 (69%)"></textarea>
     <button id="save">Save</button>
     <div class="status" id="status"></div>
 
     <table id="results" style="display:none">
-      <thead><tr><th>Team</th><th>Pick %</th><th>Count</th></tr></thead>
+      <thead><tr><th>Team</th><th>Still available</th><th>Pick %</th><th>Count</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -51,9 +52,11 @@ async function loadExisting() {
 }
 
 function renderTable(rows) {
-  rows.sort((a, b) => (b.pick_count ?? b.pct ?? 0) - (a.pick_count ?? a.pct ?? 0));
+  rows.sort((a, b) => (a.available ?? Infinity) - (b.available ?? Infinity) || (b.pick_count ?? b.pct ?? 0) - (a.pick_count ?? a.pct ?? 0));
   document.getElementById("rows").innerHTML = rows.map(r => `
-    <tr><td class="tm">${r.team}</td><td>${r.pct != null ? r.pct + "%" : "—"}</td>
+    <tr><td class="tm">${r.team}</td>
+    <td>${r.available != null ? `${r.available}/${r.n_alive} (${Math.round(100 * r.available / r.n_alive)}%)` : "—"}</td>
+    <td>${r.pct != null ? r.pct + "%" : "—"}</td>
     <td>${r.pick_count ?? "—"}</td></tr>`).join("");
   document.getElementById("results").style.display = "table";
 }
@@ -70,7 +73,7 @@ document.getElementById("save").addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error(await res.text());
     const rows = await res.json();
-    status.textContent = `Saved ${rows.length} teams.`; status.className = "status ok";
+    status.textContent = `Saved ${rows.length} teams${rows[0].n_alive ? ` (${rows[0].n_alive} live entries)` : ""}.`; status.className = "status ok";
     renderTable(rows);
   } catch (err) {
     status.textContent = `Failed: ${err}`; status.className = "status err";

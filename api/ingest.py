@@ -21,7 +21,7 @@ import csv
 import json
 from pathlib import Path
 
-from models import Entry, Pick, Recommendation, SessionLocal, init_db
+from models import Entry, Ownership, Pick, Recommendation, SessionLocal, init_db
 
 
 def ingest_recommendation(db, league_id: int, week: int, pick_sheet_path: Path,
@@ -94,6 +94,20 @@ def export_picks(db, league_id: int, picks_csv_path: Path, before_week: int | No
         for entry_id, week, team, survived in rows:
             writer.writerow([entry_id, week, team, "" if survived is None else survived])
     return len(rows)
+
+
+def export_availability(db, league_id: int, week: int, path: Path) -> int | None:
+    """Write the week's pasted availability report (the Ownership page's rows) in the text shape
+    parse_availability reads, so run_weekly.py --rival-availability can use it. Returns the
+    live-entry count, or None (no file written) if no availability rows were pasted that week."""
+    rows = (db.query(Ownership).filter(Ownership.league_id == league_id, Ownership.week == week,
+                                       Ownership.available.isnot(None)).order_by(Ownership.available).all())
+    if not rows:
+        return None
+    n_alive = rows[0].n_alive
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(f"{r.team}: {r.available}/{n_alive} (0%)" for r in rows) + "\n", encoding="utf-8")
+    return n_alive
 
 
 def load_summary(pick_sheet_dir: Path, week: int) -> dict:

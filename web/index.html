@@ -59,7 +59,9 @@ async function load() {
 
   const cols = Object.entries(byTeam).map(([team, ids]) => {
     const own = ownByTeam[team];
-    const ownLine = own
+    const ownLine = own && own.available != null
+      ? `<div class="own">${Math.round(100 * own.available / own.n_alive)}% of live entries can still pick</div>`
+      : own
       ? `<div class="own">${own.pct != null ? own.pct + "%" : ""}${own.pct != null && own.pick_count != null ? " · " : ""}${own.pick_count != null ? own.pick_count + " picks" : ""} of the league</div>`
       : `<div class="own dim">league %: not pasted yet</div>`;
     return `

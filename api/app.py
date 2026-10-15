@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ownership_parse import parse_ownership_text
+from survivor.data.availability import parse_availability
 from pick_rules import validate_pick
 from seed import seed_if_empty
 from survivor.data.team_keys import ALL_TEAMS
@@ -247,17 +248,31 @@ class OwnershipIn(BaseModel):
 
 class OwnershipRow(BaseModel):
     team: str
-    pick_count: int | None
-    pct: float | None
+    pick_count: int | None = None
+    pct: float | None = None
+    available: int | None = None  # availability report rows: live entries that can still pick the team
+    n_alive: int | None = None
+
+
+def _parse_pasted_table(raw_text: str) -> list[dict]:
+    """Brent's paste is Splash's availability report ('Vikings: 387/610 (63%)'); the older
+    pick-share formats ('Chiefs 39% 948') still work."""
+    try:
+        n_alive, available = parse_availability(raw_text, allow_missing=True)
+        return [{"team": t, "available": c, "n_alive": n_alive} for t, c in available.items()]
+    except ValueError:
+        return parse_ownership_text(raw_text)
 
 
 @app.post("/leagues/{league_id}/ownership", response_model=list[OwnershipRow], dependencies=PROTECTED)
 def save_ownership(league_id: int, body: OwnershipIn):
-    rows = parse_ownership_text(body.raw_text)
+    rows = _parse_pasted_table(body.raw_text)
     if not rows:
-        raise HTTPException(400, "couldn't parse any lines -- expected 'TEAM COUNT' or 'TEAM PCT% COUNT' per line")
+        raise HTTPException(400, "couldn't parse any lines -- expected 'TEAM: AVAILABLE/LIVE (PCT%)', 'TEAM COUNT' or 'TEAM PCT% COUNT' per line")
     db = SessionLocal()
     try:
+        # a re-paste replaces the whole week's table, so a team dropped from it doesn't linger
+        db.query(Ownership).filter_by(league_id=league_id, week=body.week).delete()
         for row in rows:
             existing = (
                 db.query(Ownership)
@@ -267,8 +282,14 @@ def save_ownership(league_id: int, body: OwnershipIn):
             if existing is None:
                 existing = Ownership(league_id=league_id, week=body.week, team=row["team"])
                 db.add(existing)
-            existing.pick_count = row["pick_count"]
-            existing.pct = row["pct"]
+            existing.pick_count = row.get("pick_count")
+            existing.pct = row.get("pct")
+            existing.available = row.get("available")
+            existing.n_alive = row.get("n_alive")
+        if rows[0].get("n_alive"):
+            league = db.get(League, league_id)
+            if league is not None:
+                league.n_rivals = rows[0]["n_alive"]  # keep the fallback rival count in step with the latest report
         db.commit()
         return [OwnershipRow(**r) for r in rows]
     finally:
@@ -280,7 +301,8 @@ def get_ownership(league_id: int, week: int):
     db = SessionLocal()
     try:
         rows = db.query(Ownership).filter_by(league_id=league_id, week=week).all()
-        return [OwnershipRow(team=r.team, pick_count=r.pick_count, pct=r.pct) for r in rows]
+        return [OwnershipRow(team=r.team, pick_count=r.pick_count, pct=r.pct, available=r.available, n_alive=r.n_alive)
+                for r in rows]
     finally:
         db.close()
 

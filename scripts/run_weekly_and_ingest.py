@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+LEAGUE_START_WEEK = 4  # same constant as run_weekly.py: no availability table applies before a league's second week
 
 
 def main() -> None:
@@ -32,7 +33,7 @@ def main() -> None:
     args = parser.parse_args()
 
     sys.path.insert(0, str(REPO_ROOT / "api"))
-    from ingest import export_picks
+    from ingest import export_availability, export_picks
     from models import League, SessionLocal
     from seed import seed_if_empty
 
@@ -61,11 +62,25 @@ def main() -> None:
     finally:
         db.close()
 
+    availability_path = store_root / "availability.txt"
+    availability_path.unlink(missing_ok=True)
+    db = SessionLocal()
+    try:
+        n_alive = export_availability(db, args.league_id, args.week, availability_path)
+    finally:
+        db.close()
+    if n_alive is None and args.week > LEAGUE_START_WEEK:
+        print(f"No availability report pasted on the Ownership page for week {args.week} -- rivals assumed "
+              f"fresh at --n-rivals {args.n_rivals}.")
+
     run_weekly_cmd = [
         sys.executable, str(REPO_ROOT / "scripts" / "run_weekly.py"),
         "--week", str(args.week), "--n-rivals", str(args.n_rivals),
         "--pot", str(args.pot), "--n-paths", str(args.n_paths),
     ]
+    if n_alive is not None and args.week > LEAGUE_START_WEEK:
+        run_weekly_cmd += ["--rival-availability", str(availability_path)]
+        print(f"Using the pasted availability report: {n_alive} live entries.")
     if args.record:
         run_weekly_cmd.append("--record")
 
