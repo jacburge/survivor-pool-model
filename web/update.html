@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Survivor Pool — update this week's numbers</title>
+<title>Survivor Pool — Settings</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E💸%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -16,18 +16,19 @@
   <nav class="pagenav">
       <a class="navbtn" href="index.html">Board</a>
       <a class="navbtn" href="picks.html">Picks</a>
-      <a class="navbtn" href="ownership.html">Ownership</a>
+      <a class="navbtn" href="ownership.html">Availability</a>
       <a class="navbtn" href="results.html">Results</a>
-      <a class="navbtn active" href="update.html">This week's numbers</a>
+      <a class="navbtn active" href="update.html">Settings</a>
       <a class="navbtn" href="guide.html">Guide</a>
     </nav>
-  <h1>This week's pool numbers</h1>
-  <p>Whatever's in here is what the Wednesday-noon run uses automatically — nobody has to type it into a command. Bump the week once Monday's game is decided, and update the count and pot from Splash before Wednesday.</p>
+  <h1>Settings</h1>
+  <p class="sub">Most weeks you don't need this page. The week turns by itself every Tuesday morning, and the live-entry
+    count comes from your availability paste. Change these only to correct something.</p>
 
-  <label for="week">Current week</label>
+  <label for="week">Current week <span class="dimtxt">· turns automatically every Tuesday</span></label>
   <input id="week" type="number" inputmode="numeric">
 
-  <label for="n">Entries still alive</label>
+  <label for="n">Live entries in the pool <span class="dimtxt">· filled in from the availability paste</span></label>
   <input id="n" type="number" inputmode="numeric">
 
   <label for="pot">Pot ($)</label>

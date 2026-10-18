@@ -21,6 +21,7 @@ from seed import seed_if_empty
 from survivor.data.team_keys import ALL_TEAMS
 from auth import check_password, issue_token, require_auth
 from models import Entry, League, Ownership, Pick, Recommendation, SessionLocal, init_db
+from nfl import advance_league_week, week_games
 
 app = FastAPI(title="Survivor Pool API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -230,6 +231,7 @@ def get_config(league_id: int):
         league = db.get(League, league_id)
         if league is None:
             raise HTTPException(404, f"league {league_id} not found")
+        advance_league_week(db, league)  # the week turns by itself each Tuesday; no one has to bump it
         return LeagueConfigOut(
             name=league.name, entry_cap=league.entry_cap, buy_in=league.buy_in,
             rake_pct=league.rake_pct, pot=league.pot, week_start=league.week_start,
@@ -237,6 +239,24 @@ def get_config(league_id: int):
         )
     finally:
         db.close()
+
+
+@app.get("/leagues/{league_id}/schedule", dependencies=PROTECTED)
+def get_schedule(league_id: int, week: int):
+    """That week's games and byes, for the matchup labels. Empty (not an error) if ESPN
+    can't be reached, so the pages still load without matchups."""
+    db = SessionLocal()
+    try:
+        league = db.get(League, league_id)
+        if league is None:
+            raise HTTPException(404, f"league {league_id} not found")
+        year = league.year
+    finally:
+        db.close()
+    try:
+        return week_games(week, year)
+    except Exception:
+        return {"week": week, "games": [], "byes": [], "unavailable": True}
 
 
 # ---------- 4. league ownership (who's picked what, reported from Splash) ----------

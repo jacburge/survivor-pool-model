@@ -35,6 +35,7 @@ def main() -> None:
     sys.path.insert(0, str(REPO_ROOT / "api"))
     from ingest import export_availability, export_picks
     from models import League, SessionLocal
+    from nfl import advance_league_week
     from seed import seed_if_empty
 
     seed_if_empty()
@@ -46,6 +47,8 @@ def main() -> None:
             league = db.get(League, args.league_id)
             if league is None:
                 raise SystemExit(f"league {args.league_id} not found -- has Brent opened update.html yet?")
+            if args.week is None and advance_league_week(db, league):
+                print(f"Week advanced to {league.current_week} from the NFL calendar.")
             args.week = args.week or league.current_week
             args.n_rivals = args.n_rivals or league.n_rivals
             args.pot = args.pot or league.pot
