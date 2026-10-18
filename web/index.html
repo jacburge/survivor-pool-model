@@ -116,7 +116,7 @@ async function load() {
   const steps = [];
   if (prev >= cfg.week_start) steps.push(pendingPrev === 0
     ? { done: true, text: `Week ${prev} results recorded` }
-    : { done: false, text: `Mark Week ${prev} results — ${pendingPrev} pick${pendingPrev > 1 ? "s" : ""} still pending`, href: "results.html", go: "Results" });
+    : { done: false, text: `Week ${prev} results — ${pendingPrev} pick${pendingPrev > 1 ? "s" : ""} waiting on a final score`, href: "results.html", go: "Results" });
   if (WEEK > cfg.week_start) steps.push(pastedAvail
     ? { done: true, text: `Availability report pasted${cfg.n_rivals ? ` (${cfg.n_rivals.toLocaleString()} live entries)` : ""}` }
     : { done: false, text: "Paste Splash's availability report", href: "ownership.html", go: "Availability" });
