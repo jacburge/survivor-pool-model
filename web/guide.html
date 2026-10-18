@@ -17,46 +17,41 @@
     <nav class="pagenav">
       <a class="navbtn" href="index.html">Board</a>
       <a class="navbtn" href="picks.html">Picks</a>
-      <a class="navbtn" href="ownership.html">Ownership</a>
+      <a class="navbtn" href="ownership.html">Availability</a>
       <a class="navbtn" href="results.html">Results</a>
-      <a class="navbtn" href="update.html">This week's numbers</a>
+      <a class="navbtn" href="update.html">Settings</a>
       <a class="navbtn active" href="guide.html">Guide</a>
     </nav>
 
     <h1>How this works</h1>
-    <p class="sub">The model suggests which team to pick for each of your entries each week. This app shows the plan and keeps track of what you've actually picked, so next week's plan knows which teams are already used.</p>
+    <p class="sub">The model suggests which team to pick for each of your entries each week. This app shows the plan, tracks what you've actually picked, and tells the next run which teams each entry has used. The Board's checklist shows what's left to do each week.</p>
 
     <h2>The weekly routine</h2>
     <ol class="steps">
-      <li><span class="when">Mon night</span><div><b>Games finish.</b><p>Last week's results are final once Monday's game is done.</p></div></li>
-      <li><span class="when">Tuesday</span><div>
-        <b>Mark last week's results <span class="who">Results page</span></b>
-        <p>Set each pick to Won or Lost. A lost pick knocks that entry out, and the model stops planning for it.</p>
-        <b style="margin-top:10px">Update the numbers <span class="who">This week's numbers</span></b>
-        <p>Set the new week, the entries still alive in the pool (from Splash), and the pot. The model reads these when it runs.</p>
-        <b style="margin-top:10px">Paste the league percentages <span class="who">Ownership page</span></b>
-        <p>Paste from Splash's Stats tab. For now this only shows on the Board. The model doesn't use it yet.</p>
+      <li><span class="when">Tue</span><div>
+        <b>Mark last week's results <span class="who">Results</span></b>
+        <p>Set each pick to Won or Lost. An entry with a loss is out, and the model stops planning for it. A tie counts as a loss.</p>
+        <b style="display:block;margin-top:10px">Paste Splash's availability report <span class="who">Availability</span></b>
+        <p>Copy the report from Splash and paste it in. The model uses it as the real state of the rest of the pool, and it also sets the live-entry count. The week has already turned over by Tuesday morning, so the paste lands on the right week.</p>
       </div></li>
-      <li><span class="when">Wed noon ET</span><div><b>The model runs by itself.</b><p>It takes a minute or two. Refresh the Board afterwards for the new plan and expected payout. It runs before Thursday night's game so a Thursday pick is possible. It's 11am ET after daylight saving ends on Nov 1.</p></div></li>
-      <li><span class="when">Wed–Sun</span><div><b>Enter your picks on Splash, then record them <span class="who">Picks page</span></b>
-        <p>Type each pick and tick "on Splash" once it's entered. Saving here is what tells next week's run which teams you've used. A pick you save is never overwritten by the model.</p></div></li>
-      <li><span class="when">Before games</span><div><b>Want fresher odds?</b><p>The Wednesday plan uses Wednesday's odds. To refresh it closer to kickoff, ask whoever manages Render to click “Trigger Run” on the weekly job.</p></div></li>
+      <li><span class="when">Wed noon ET</span><div><b>The model runs by itself.</b><p>It takes a minute or two. Refresh the Board for the new plan. Running on Wednesday leaves time for a Thursday-night pick. After daylight saving ends on Nov 1 it runs at 11am ET.</p></div></li>
+      <li><span class="when">Wed–Sun</span><div><b>Enter picks on Splash, then tick them off <span class="who">Picks</span></b>
+        <p>Each pick shows its opponent, like “LAR vs ARI”. Change a pick if you're going a different way, and tick “on Splash” once it's entered. Saving here is what tells next week's run which teams you've used. Splash locks every remaining game at Sunday 1pm ET, and earlier games at their own kickoff.</p></div></li>
     </ol>
 
     <h2>What each page does</h2>
-    <div class="card"><b>Board</b><p>The model's recommended picks, grouped by team, with its expected payout. Open “Entered vs. the model” to compare with what's actually entered.</p></div>
-    <div class="card"><b>Picks</b><p>Enter or change each entry's pick for this week, and mark when it's on Splash.</p></div>
-    <div class="card"><b>Ownership</b><p>Paste the league's pick percentages from Splash's Stats tab.</p></div>
+    <div class="card"><b>Board</b><p>This week's checklist, the model's picks grouped by team with each opponent and lock time, and the model's expected payout. Open “Entered vs. the model” to compare with what's actually entered.</p></div>
+    <div class="card"><b>Picks</b><p>Each entry's pick for this week. The dropdown only offers teams that entry hasn't used and that aren't on a bye.</p></div>
+    <div class="card"><b>Availability</b><p>Where Splash's availability report goes each week. It feeds the model.</p></div>
     <div class="card"><b>Results</b><p>Mark each past pick Won or Lost. Entries with a loss show as “Out.”</p></div>
-    <div class="card"><b>This week's numbers</b><p>The current week, the entries still alive, and the pot. The model uses these.</p></div>
+    <div class="card"><b>Settings</b><p>The week, live entries and pot. The week and live entries fill in by themselves, so this is only for corrections.</p></div>
 
     <h2>Good to know</h2>
     <ul class="plain">
       <li><b>The model's picks are suggestions.</b> You can enter something different. The Board shows how many entered picks differ.</li>
-      <li><b>If you forget to save a pick,</b> the model's suggestion is saved for you as that entry's pick when it runs, so teams you've used don't get forgotten. Check the Picks page if you went a different way.</li>
-      <li><b>A tie counts as a loss.</b></li>
-      <li><b>The first page load can be slow</b> (up to about 30 seconds) if nobody has used the app for a while.</li>
-      <li><b>If the Board says “no model recommendation yet,”</b> the weekly run hasn't happened for the current week. Check that the week on “This week's numbers” is right.</li>
+      <li><b>If you forget to save a pick,</b> the model's suggestion is saved as that entry's pick when it runs, so used teams aren't forgotten. Check the Picks page if you went a different way.</li>
+      <li><b>Want fresher odds before kickoff?</b> Whoever manages Render can click “Trigger Run” on the weekly job.</li>
+      <li><b>The first page load can be slow</b> (up to about a minute) if nobody has used the app for a while.</li>
       <li><b>Login:</b> one shared password for everyone. Ask Jaclyn if you've lost it.</li>
     </ul>
   </div>

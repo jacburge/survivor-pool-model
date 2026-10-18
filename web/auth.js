@@ -34,3 +34,30 @@ async function getCurrentWeek(league) {
   const res = await authedFetch(`/leagues/${league}/config`);
   return (await res.json()).current_week;
 }
+
+// This week's games, for "LAR vs ARI" labels and lock times. Degrades to plain team
+// names if the schedule can't be reached.
+async function getMatchups(league, week) {
+  let data = { games: [], byes: [] };
+  try {
+    const res = await authedFetch(`/leagues/${league}/schedule?week=${week}`);
+    if (res.ok) data = await res.json();
+  } catch (e) {}
+  const games = data.games || [];
+  const byTeam = {};
+  games.forEach(g => {
+    byTeam[g.home] = { vs: g.away, home: true, lock: g.lock };
+    byTeam[g.away] = { vs: g.home, home: false, lock: g.lock };
+  });
+  return {
+    known: games.length > 0,
+    byes: data.byes || [],
+    opponent: team => byTeam[team] ? `${byTeam[team].home ? "vs" : "@"} ${byTeam[team].vs}` : "",
+    label: team => byTeam[team] ? `${team} ${byTeam[team].home ? "vs" : "@"} ${byTeam[team].vs}` : team,
+    lock: team => byTeam[team] ? new Date(byTeam[team].lock) : null,
+  };
+}
+
+function lockText(date) {
+  return date ? date.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+}
